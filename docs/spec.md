@@ -1,8 +1,3 @@
----
-title: arquitectura_juego
-tags: [arquitectura,juego]
-updated: 2026-10-13
----
 # Arquitectura generica de un juego
 
 Para construir un videojuego modular, escalable y eficiente en memoria, la combinación de una Máquina de Estados de Aplicación (FSM) para el flujo global, un Bucle de Juego (Game Loop) unificado y el Patrón Entidad-Componente-Sistema (ECS) para la lógica interna es la mejor opción.

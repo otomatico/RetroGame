@@ -1,8 +1,3 @@
----
-title: template-retrogame
-tags: [retrogame, arquitectura,UI, recetas]
-updated: 2026-10-13
----
 # 🌍 Protocolo Global RetroGame (Fuente de Verdad)
 Esta sección define las reglas invariables que se aplican a todos los juegos creados en este proyecto **RetroGame**.
 
@@ -14,24 +9,25 @@ Esta sección define las reglas invariables que se aplican a todos los juegos cr
 Todos los textos importantes deben seguir el patrón de **Aberración Cromática** (sombras Cyan y Magenta). El código de referencia es:
 
 ```javascript
-render() {
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
+render(text, x, y, size) {
+    ctx.font = `bold ${size}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     
     // Shadow Magenta
     ctx.shadowColor = "magenta";
     ctx.shadowBlur = 15;
     ctx.fillStyle = "white";
-    ctx.fillText(text, cx + 3, cy + 3);
+    ctx.fillText(text, x + 3, y + 3);
 
     // Shadow Cyan
     ctx.shadowColor = "cyan";
-    ctx.fillText(text, cx - 3, cy - 3);
+    ctx.fillText(text, x - 3, y - 3);
 
     // Main Text
     ctx.shadowBlur = 0;
     ctx.fillStyle = "white";
-    ctx.fillText(text, cx, cy);
+    ctx.fillText(text, x, y);
 }
 ```
 
