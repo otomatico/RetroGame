@@ -9,17 +9,17 @@ El bucle principal es el motor del juego. Se ejecuta continuamente y, en cada it
 [ Game Loop ] ──> Lee Input ──> [ Estado Activo (FSM) ] ──> Renderiza
                                        │
                                        ├──> Boot (Inicializa)
-                                       ├──> MainMenu (UI / Eventos)
-                                       ├──> Gameplay (Actualiza ECS)
+                                       ├──> Menu (UI / Eventos)
+                                       ├──> Playing (Actualiza ECS)
                                        ├──> Pause (Mantiene ECS congelado)
-                                       └──> GameOver (UI / Cleanup)
+                                       └──> Over (UI / Cleanup)
 
 ## 2. Receta de los Estados de la FSM
 
 Cada estado debe implementar una interfaz limpia (Enter, Update, Render, Exit). La liberación de memoria ocurre estrictamente en el método Exit o mediante transiciones controladas.
 - Boot: Carga los recursos globales mínimos (fuentes del sistema, configuraciones guardadas). Transiciona inmediatamente a MainMenu.
-- MainMenu: Carga la interfaz gráfica del menú. Al salir (Exit), destruye los elementos visuales del menú para liberar la RAM/VRAM de la UI.
-- Gameplay:
+- Menu: Carga la interfaz gráfica del menú. Al salir (Exit), destruye los elementos visuales del menú para liberar la RAM/VRAM de la UI.
+- Playing:
   - Enter: Asigna memoria para el mundo (ECS Registry), carga el mapa, spawnea jugador y enemigos.
   - Update: Ejecuta los Sistemas del ECS.
   - Exit: Destruye por completo el registro ECS y limpia texturas/audio del nivel actual.
@@ -56,8 +56,8 @@ C. Gestor de Recursos (ResourceManager / Caché)
 # Resumen de Ejecución de la Receta
 
 1. Enciende el juego (Boot): Reserva piscinas de memoria estáticas (Memory Pools).
-2. Carga Menú (MainMenu): Aloja memoria para UI.
-3. Inicia partida (Gameplay): Libera memoria de UI del menú. Aloja buffers contiguos para componentes ECS. Carga assets del nivel.
+2. Carga Menú (Menu): Aloja memoria para UI.
+3. Inicia partida (Playing): Libera memoria de UI del menú. Aloja buffers contiguos para componentes ECS. Carga assets del nivel.
 4. Bucle de juego: Los Sistemas leen y escriben en los componentes en bloques de memoria contiguos hiper-rápidos.
-5. Muere el jugador (GameOver): El ECS se pausa o se congela su renderizado.
+5. Muere el jugador (Over): El ECS se pausa o se congela su renderizado.
 6. Salir al menú: Se invoca el método de limpieza del ECS, eliminando todas las entidades y liberando los vectores de componentes de golpe de la memoria RAM.

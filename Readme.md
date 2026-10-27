@@ -36,14 +36,14 @@ render(text, x, y, size) {
 *   **Fondo:** Negro.
 *   **Comportamiento:** Transición automática tras ~2 segundos.
 
-#### B. Estado MainMenu
+#### B. Estado Menu
 *   **Texto Principal:** Título del juego (ej: "Rompe Ladrillo" en la referencia base) centrado.
 *   **Estilo:** Mismo patrón de sombra que Boot (Blanco + Cyan/Magenta).
 *   **Texto Secundario ("Iniciar juego"):** 
     *   Posición: Abajo y centrado.
     *   Animación: `fadeON/fadeOFF` cada 500ms.
 
-#### C. Estado GameOver
+#### C. Estado Over
 *   **Texto:** "Victory" o "You Loser".
 *   **Posición:** Centrado.
 *   **Estilo:** Blanco con sombras Cyan y Magenta sobre fondo negro.
