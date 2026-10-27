@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>FLAPPER — RetroGame</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; }
+canvas { image-rendering: pixelated; display: block; }
+</style>
+</head>
+<body>
+<canvas id="gc"></canvas>
+<script>
+'use strict';
+
+/* ================================================================
+   RetroGame "Flapper" — FlappyBird retro con scroll horizontal
+   Arquitectura: FSM (Boot→Menu→Play→GameOver) + ECS Data-Oriented
+   Estética: Aberración Cromática cyan/magenta (Readme.md)
+   ================================================================ */
+
+/* ── Canvas & resolución virtual 480x260 ────────────────────── */
+const canvas = document.getElementById('gc');
+const ctx    = canvas.getContext('2d', { alpha: false });
+const VW = 480, VH = 260;          // resolución virtual del juego
+const GROUND_Y = 236;              // línea del suelo (franja 236..260)
+
+let viewScale = 1, viewOX = 0, viewOY = 0;
+
+function resize() {
+    const w = window.innerWidth | 0, h = window.innerHeight | 0;
+    canvas.width = w; canvas.height = h;
+    viewScale = Math.min(w / VW, h / VH);
+    viewOX = (w - VW * viewScale) / 2;
+    viewOY = (h - VH * viewScale) / 2;
+    ctx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', resize);
+
+/* ── Colores retro ─────────────────────────────────────────── */
+const COL_BG    = '#050614';
+const COL_WHITE = '#ffffff';
+const COL_CYAN  = '#00ffff';
+const COL_MAG   = '#ff00ff';
+const COL_BIRD  = '#ffd93d';
+const COL_PIPE  = '#31c451';
+const COL_BEAK  = '#ff9d2e';
+
+/* Texto con aberración cromática (patrón Readme.md) */
+function drawChromaText(text, x, y, size) {
+    ctx.font = `bold ${size}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // Shadow Magenta
+    ctx.shadowColor = COL_MAG ;
+    ctx.shadowBlur = 15;
+    ctx.fillStyle = COL_WHITE ;
+    ctx.fillText(text, x + 3, y + 3);
+
+    // Shadow Cyan
+    ctx.shadowColor = COL_CYAN;
+    ctx.fillText(text, x - 3, y - 3);
+
+    // Main Text
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = COL_WHITE;
+    ctx.fillText(text, x, y);
+}
+function drawText(text, x, y, size) {
+    ctx.font = `bold ${size}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // Main Text
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = COL_WHITE;
+    ctx.fillText(text, x, y);
+}
+/* ── FSM (Readme.md §1: Boot→MainMenu→Playing→GameOver) ────── */
+const STATE = { BOOT: 'BOOT', MAIN_MENU: 'MAIN_MENU', GAMEPLAY: 'GAMEPLAY', GAME_OVER: 'GAME_OVER' };
+let state      = STATE.BOOT;
+let stateTimer = 0;               // ms transcurridos en el estado actual
+let score      = 0;
+let highScore  = getHigh();
+let won        = false;
+
+function getHigh() { try { return +localStorage.getItem('flapper_hs') || 0; } catch (e) { return 0; } }
+function setHigh(v) { try { localStorage.setItem('flapper_hs', v | 0); } catch (e) {} }
+
+function goTo(s) {
+    if (state === STATE.GAMEPLAY) exitGameplay();   // Exit del estado anterior (spec.md §4A)
+    state = s;
+    stateTimer = 0;
+    if (s === STATE.GAMEPLAY) enterGameplay();      // Enter: aloja el ECS de la partida
+}
+
+/* ═══════════════ ECS (spec.md §3-4: pool + arrays SOA) ═══════ */
+const MAX_E = 128;
+const aliveBit = new Uint8Array(MAX_E);   // bitmask vivo/muerto
+const freeList = [];
+for (let i = MAX_E - 1; i >= 0; i--) freeList.push(i);   // pop() entrega 0 primero
+
+// Componentes SOA contiguos (cache-friendly)
+const TX   = new Float32Array(MAX_E);     // posición X
+const TY   = new Float32Array(MAX_E);     // posición Y
+const VX   = new Float32Array(MAX_E);     // velocidad X
+const VY   = new Float32Array(MAX_E);     // velocidad Y
+const RW   = new Uint8Array(MAX_E);       // ancho de render/hitbox
+const RH   = new Uint8Array(MAX_E);       // alto de render/hitbox
+const RTYPE = new Uint8Array(MAX_E);      // 0 = pájaro, 1 = tubo
+const scored = new Uint8Array(MAX_E);     // tubo ya puntuado
+
+function entityAlloc() { return freeList.length ? freeList.pop() : -1; }
+function entityFree(id) { if (aliveBit[id]) { aliveBit[id] = 0; freeList.push(id); } }  // Object Pooling (spec.md §4B)
+function clearEntities() { for (let i = 0; i < MAX_E; i++) entityFree(i); }
+
+/* ── Constantes y estado de partida ────────────────────────── */
+const PIPE_W = 18, BIRD_W = 8, BIRD_H = 16, BIRD_X = 72;   // pájaro fijo en X (~15 %)
+const GRAVITY = 1000, FLAP_V = -320, TERM_V = 480;          // px/s², px/s
+const VICTORY_SCORE = 42;                                   // puntuación objetivo (victoria)
+
+let gameSpeed, gapH, spawnGap, difficulty, spawnCountdown, playerID, scrollX;
+
+function enterGameplay() {
+    clearEntities();
+    score = 0; won = false;
+    gameSpeed = 88; gapH = 82; spawnGap = 150; difficulty = 1.0;
+    spawnCountdown = 0;
+    playerID = entityAlloc();
+    TX[playerID] = BIRD_X; TY[playerID] = VH / 2 - BIRD_H / 2;
+    VX[playerID] = 0;  VY[playerID] = 0;
+    RW[playerID] = BIRD_W; RH[playerID] = BIRD_H;
+    RTYPE[playerID] = 0; scored[playerID] = 0;
+    aliveBit[playerID] = 1;
+}
+function exitGameplay() { clearEntities(); playerID = -1; }
+
+function spawnPipe() {
+    const id = entityAlloc();
+    if (id < 0) return;
+    const margin = 30;                                   // margen vertical del hueco
+    const maxTop = GROUND_Y - gapH - margin;
+    TX[id] = VW + 8;                                     // nace en el borde derecho
+    TY[id] = margin + Math.random() * (maxTop - margin); // tope superior del hueco
+    VX[id] = -gameSpeed; VY[id] = 0;
+    RW[id] = PIPE_W; RH[id] = gapH;
+    RTYPE[id] = 1; scored[id] = 0;
+    aliveBit[id] = 1;
+}
+
+/* ── Sistemas ECS (lógica pura sobre los SOA) ──────────────── */
+
+// System: física — gravedad del pájaro, movimiento por velocidad, reciclaje de tubos
+function sysPhysics(dt) {
+    for (let i = 0; i < MAX_E; i++) {
+        if (!aliveBit[i]) continue;
+        if (RTYPE[i] === 0) {
+            VY[i] += GRAVITY * dt;
+            if (VY[i] > TERM_V) VY[i] = TERM_V;
+        } else {
+            VX[i] = -gameSpeed;                          // el mundo se desplaza hacia la izquierda
+            if (TX[i] + RW[i] < -2) { entityFree(i); continue; }  // fuera de pantalla → recicla
+        }
+        TX[i] += VX[i] * dt;
+        TY[i] += VY[i] * dt;
+    }
+    if (TY[playerID] < 0) { TY[playerID] = 0; VY[playerID] = 0; } // techo: rebote suave
+}
+
+// System: spawning procedural de tubos según dificultad
+function sysSpawn(dt) {
+    spawnCountdown += gameSpeed * dt;
+    if (spawnCountdown >= spawnGap) { spawnCountdown = 0; spawnPipe(); }
+}
+
+// System: progresión (velocidad/hueco) + puntuación al superar tubos
+function sysProgress(dt) {
+    difficulty += dt * 0.05;
+    gameSpeed  = Math.min(150, 88 + difficulty * 6);
+    gapH       = Math.max(56, 84 - difficulty * 2.5);
+    spawnGap   = Math.max(110, 160 - difficulty * 4);
+    for (let i = 0; i < MAX_E; i++) {
+        if (aliveBit[i] && RTYPE[i] === 1 && !scored[i] && TX[i] + RW[i] < TX[playerID]) {
+            scored[i] = 1;
+            score += 1;
+        }
+    }
+}
+
+// System: colisiones AABB — pájaro vs suelo y vs tubos (hueco)
+function sysCollide() {
+    const px = TX[playerID] + 1, pw = RW[playerID] - 2;   // hitbox un poco menor que el sprite
+    const py = TY[playerID] + 1, ph = RH[playerID] - 2;
+    if (py + ph >= GROUND_Y) { endGame(false); return; }  // suelo = muerte
+    for (let i = 0; i < MAX_E; i++) {
+        if (!aliveBit[i] || RTYPE[i] !== 1) continue;
+        if (px + pw <= TX[i] || px >= TX[i] + RW[i]) continue;   // sin solape horizontal
+        if (py < TY[i] || py + ph > TY[i] + RH[i]) { endGame(false); return; } // tubo arriba o abajo
+    }
+}
+
+function endGame(victory) {
+    won = victory;
+    if (score > highScore) highScore = score;
+    setHigh(highScore);
+    goTo(STATE.GAME_OVER);
+}
+
+/* ═══════════════ Render (parallax + entidades + HUD) ════════ */
+const CLOUDS = [], HILLS = [];
+for (let i = 0; i < 10; i++) CLOUDS.push({ x: Math.random() * VW, y: 18 + Math.random() * 80, w: 14 + Math.random() * 22 });
+for (let i = 0; i < 8;  i++) HILLS.push({ x: i * 62 + Math.random() * 20, w: 40 + Math.random() * 30, h: 16 + Math.random() * 26 });
+
+// Envuelve X en [-w, VW): el objeto entra por la derecha y sale por la izquierda
+function wrapX(x, w) {
+    const span = VW + w;
+    return (((x + w) % span) + span) % span - w;
+}
+
+function beginFrame() {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = COL_BG;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(viewScale, 0, 0, viewScale, viewOX, viewOY);
+}
+
+function drawParallax() {
+    // Capa lejana: nubes (8 % de la velocidad)
+    ctx.fillStyle = '#2a2f55';
+    const s1 = scrollX * 0.08;
+    for (let i = 0; i < CLOUDS.length; i++) {
+        const c = CLOUDS[i];
+        ctx.fillRect(wrapX(c.x - s1, c.w) | 0, c.y | 0, c.w | 0, 3);
+    }
+    // Capa media: colinas (25 %)
+    ctx.fillStyle = '#1c2140';
+    const s2 = scrollX * 0.25;
+    for (let i = 0; i < HILLS.length; i++) {
+        const h = HILLS[i];
+        ctx.fillRect(wrapX(h.x - s2, h.w) | 0, (GROUND_Y - h.h) | 0, h.w | 0, h.h | 0);
+    }
+    // Suelo con franjas a velocidad completa
+    ctx.fillStyle = '#0e1030';
+    ctx.fillRect(0, GROUND_Y, VW, VH - GROUND_Y);
+    ctx.fillStyle = '#5760a8';
+    ctx.fillRect(0, GROUND_Y, VW, 1);
+    ctx.fillStyle = '#39406f';
+    const gs = scrollX % 24;
+    for (let x = -24; x < VW + 24; x += 24) ctx.fillRect((x - gs) | 0, GROUND_Y + 6, 12, 2);
+}
+
+function drawPipes() {
+    for (let i = 0; i < MAX_E; i++) {
+        if (!aliveBit[i] || RTYPE[i] !== 1) continue;
+        const ox = TX[i] | 0, oy = TY[i] | 0, oh = RH[i] | 0, w = RW[i];
+        const botY = oy + oh, botH = GROUND_Y - botY;
+        // sombra cyan/magenta + cuerpo (estilo pong.html)
+        ctx.fillStyle = COL_CYAN;
+        ctx.fillRect(ox + 1, 1, w - 2, oy - 1);
+        ctx.fillRect(ox + 1, botY + 1, w - 2, botH - 1);
+        ctx.fillStyle = COL_MAG;
+        ctx.fillRect(ox - 1, -1, w - 2, oy + 1);
+        ctx.fillRect(ox - 1, botY - 1, w - 2, botH + 1);
+        ctx.fillStyle = COL_PIPE;
+        ctx.fillRect(ox, 0, w, oy);
+        ctx.fillRect(ox, botY, w, botH);
+        // tapas del hueco
+        ctx.fillStyle = '#5fe07a';
+        ctx.fillRect(ox - 2, oy - 4, w + 4, 4);
+        ctx.fillRect(ox - 2, botY, w + 4, 4);
+    }
+}
+
+function drawBird() {
+    if (playerID < 0 || !aliveBit[playerID]) return;
+    const x = TX[playerID] | 0, y = TY[playerID] | 0, w = RW[playerID], h = RH[playerID];
+    ctx.fillStyle = COL_CYAN; ctx.fillRect(x + 1, y + 1, w, h);
+    ctx.fillStyle = COL_MAG;  ctx.fillRect(x - 1, y - 1, w, h);
+    ctx.fillStyle = COL_BIRD; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = COL_BEAK; ctx.fillRect(x + w - 1, y + 7, 3, 2);   // pico
+    ctx.fillStyle = '#1a1a2e'; ctx.fillRect(x + w - 4, y + 3, 2, 2); // ojo
+}
+
+function drawHUD() {
+    drawText(String(score), VW / 2, 24, 20);
+}
+
+function drawWorld() {
+    drawParallax();
+    drawPipes();
+    drawBird();
+    drawHUD();
+}
+
+/* ── Estados: Enter / Update / Draw ────────────────────────── */
+
+// BOOT: "Otomatico" ~2 s (Readme.md §A)
+function enterBoot() {}
+function updateBoot() { if (stateTimer > 2000) goTo(STATE.MAIN_MENU); }
+function drawBoot() {
+    beginFrame();
+    drawChromaText('OTOMATICO', VW / 2, VH / 2, 36);
+}
+
+// MAIN_MENU: título + "Iniciar juego" con fade 500 ms (Readme.md §B)
+function enterMainMenu() {}
+function updateMainMenu(dt) { scrollX += 24 * dt; }
+function drawMainMenu() {
+    beginFrame();
+    drawParallax();
+    drawChromaText('FLAPPER', VW / 2, VH / 3, 48);
+    const phase = (stateTimer % 1000) / 1000;               // 500 ms sube + 500 ms baja
+    ctx.globalAlpha = phase < 0.5 ? phase * 2 : (1 - phase) * 2;
+    drawText('Iniciar juego', VW / 2, VH * 2 / 3 + 20, 20);
+    ctx.globalAlpha = 1;
+    drawText('Récord: ' + highScore, VW / 2, VH - 24, 14);
+}
+
+// GAMEPLAY: ECS systems (spec.md Resumen de Ejecución)
+function updateGameplay(dt) {
+    scrollX += gameSpeed * dt;
+    sysPhysics(dt);
+    sysSpawn(dt);
+    sysProgress(dt);
+    sysCollide();
+    if (state === STATE.GAMEPLAY && score >= VICTORY_SCORE) endGame(true);
+}
+function drawGameplay() {
+    beginFrame();
+    drawWorld();
+}
+
+// GAME_OVER: escena congelada + overlay + texto (Readme.md §C)
+function enterGameOver() {}
+function updateGameOver() {}
+function drawGameOver() {
+    beginFrame();
+    drawWorld();                                            // mundo congelado
+    ctx.fillStyle = 'rgba(5,6,20,0.72)';
+    ctx.fillRect(0, 0, VW, VH);
+    drawChromaText(won ? 'VICTORY' : 'YOU LOSER', VW / 2, VH / 3, 44);
+    drawText('Puntaje: ' + score + '   Récord: ' + highScore, VW / 2, VH / 2 + 10, 16);
+    if (stateTimer > 400 && (stateTimer % 800) < 400) {
+        drawText('ESPACIO o TAP para menú', VW / 2, VH * 2 / 3 + 24, 14);
+    }
+}
+
+/* ── Bucle principal ───────────────────────────────────────── */
+function update(dt) {                                        // dt en ms
+    stateTimer += dt;
+    const ds = dt / 1000;                                    // dt en segundos
+    switch (state) {
+        case STATE.BOOT:       updateBoot();            break;
+        case STATE.MAIN_MENU:  updateMainMenu(ds);      break;
+        case STATE.GAMEPLAY:   updateGameplay(ds);      break;
+        case STATE.GAME_OVER:  updateGameOver();        break;
+    }
+}
+
+function draw() {
+    switch (state) {
+        case STATE.BOOT:       drawBoot();       break;
+        case STATE.MAIN_MENU:  drawMainMenu();   break;
+        case STATE.GAMEPLAY:   drawGameplay();   break;
+        case STATE.GAME_OVER:  drawGameOver();   break;
+    }
+}
+
+let lastTime = performance.now();
+function loop(now) {
+    const dt = Math.min(now - lastTime, 50);                 // cap anti-salto de timestep
+    lastTime = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+}
+
+/* ── Input ─────────────────────────────────────────────────── */
+function onAction() {
+    if (state === STATE.BOOT)            goTo(STATE.MAIN_MENU);
+    else if (state === STATE.MAIN_MENU)  goTo(STATE.GAMEPLAY);
+    else if (state === STATE.GAMEPLAY)   VY[playerID] = FLAP_V;
+    else if (state === STATE.GAME_OVER && stateTimer > 400) goTo(STATE.MAIN_MENU);
+}
+
+document.addEventListener('keydown', e => {
+    if (e.code === 'Space' || e.key === 'Enter') { e.preventDefault(); onAction(); }
+});
+canvas.addEventListener('pointerdown', e => { e.preventDefault(); onAction(); });  // cubre ratón y táctil
+
+/* ── Arranque ──────────────────────────────────────────────── */
+resize();
+goTo(STATE.BOOT);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

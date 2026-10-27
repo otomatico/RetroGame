@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>T-REX DASH — RetroGame</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; }
+canvas { image-rendering: pixelated; display: block; }
+</style>
+</head>
+<body>
+<canvas id="gc"></canvas>
+<script>
+'use strict';
+
+/* ================================================================
+   RetroGame "T-Rex Dash" — runner con scroll horizontal
+   Arquitectura: FSM (Boot→Menu→Play→GameOver) + ECS Data-Oriented
+   Estética: Aberración Cromática cyan/magenta (Readme.md)
+   Niveles: obstáculos procedurales (cactus y pterodáctilos) con
+   dificultad progresiva y ciclo día/noche; parallax a 4 velocidades.
+   ================================================================ */
+
+/* ── Canvas & resolución virtual 480x260 ────────────────────── */
+const canvas = document.getElementById('gc');
+const ctx    = canvas.getContext('2d', { alpha: false });
+const VW = 480, VH = 260;          // resolución virtual del juego
+const GROUND_Y = 224;              // línea del suelo (franja 224..260)
+
+let viewScale = 1, viewOX = 0, viewOY = 0;
+
+function resize() {
+    const w = window.innerWidth | 0, h = window.innerHeight | 0;
+    canvas.width = w; canvas.height = h;
+    viewScale = Math.min(w / VW, h / VH);
+    viewOX = (w - VW * viewScale) / 2;
+    viewOY = (h - VH * viewScale) / 2;
+    ctx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', resize);
+
+/* ── Colores & paletas (ciclo día/noche) ───────────────────── */
+const COL_WHITE = '#ffffff', COL_CYAN = '#00ffff', COL_MAG = '#ff00ff';
+const COL_DINO  = '#e8ecf5', COL_DINO_DARK = '#3a3f4a';
+
+const PAL_DAY = {
+    sky: '#0e1430', hillFar: '#1c2140', hillNear: '#2a2f55', cloud: '#39406f',
+    ground: '#0e1030', stripe: '#39406f', line: '#5760a8',
+    cactus: '#31c451', ptero: '#ff8080', star: '#000000',
+};
+const PAL_NIGHT = {
+    sky: '#050614', hillFar: '#12162a', hillNear: '#1a1f33', cloud: '#20263f',
+    ground: '#0a0c20', stripe: '#232945', line: '#3a4060',
+    cactus: '#7de08c', ptero: '#ffa0a0', star: '#8fa3d8',
+};
+let night = false;
+const pal = () => (night ? PAL_NIGHT : PAL_DAY);
+
+/* Texto con aberración cromática (patrón Readme.md) */
+function drawChromaText(text, x, y, size) {
+    ctx.font = `bold ${size}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = COL_WHITE;
+    ctx.shadowColor = COL_MAG;
+    ctx.shadowBlur = 15;
+    ctx.fillText(text, x + 3, y + 3);
+    ctx.shadowColor = COL_CYAN;
+    ctx.fillText(text, x - 3, y - 3);
+    ctx.shadowBlur = 0;
+    ctx.fillText(text, x, y);
+}
+
+function drawText(text, x, y, size) {
+    ctx.font = `bold ${size}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = COL_WHITE;
+    ctx.shadowBlur = 0;
+    ctx.fillText(text, x, y);
+}
+
+/* ── FSM (Readme.md §1: Boot→MainMenu→Playing→GameOver) ────── */
+const STATE = { BOOT: 'BOOT', MAIN_MENU: 'MAIN_MENU', GAMEPLAY: 'GAMEPLAY', GAME_OVER: 'GAME_OVER' };
+let state      = STATE.BOOT;
+let stateTimer = 0;               // ms transcurridos en el estado actual
+let score      = 0;
+let highScore  = getHigh();
+let won        = false;
+let animTime   = 0;               // s — animación de piernas/estrellas
+
+function getHigh() { try { return +localStorage.getItem('trex_hs') || 0; } catch (e) { return 0; } }
+function setHigh(v) { try { localStorage.setItem('trex_hs', v | 0); } catch (e) {} }
+
+function goTo(s) {
+    if (state === STATE.GAMEPLAY) exitGameplay();   // Exit del estado anterior (spec.md §4A)
+    state = s;
+    stateTimer = 0;
+    if (s === STATE.GAMEPLAY) enterGameplay();      // Enter: aloja el ECS de la partida
+}
+
+/* ═══════════════ ECS (spec.md §3-4: pool + arrays SOA) ═══════ */
+const MAX_E = 128;
+const aliveBit = new Uint8Array(MAX_E);   // bitmask vivo/muerto
+const freeList = [];
+for (let i = MAX_E - 1; i >= 0; i--) freeList.push(i);   // pop() entrega 0 primero
+
+// Componentes SOA contiguos (cache-friendly)
+const TX    = new Float32Array(MAX_E);    // posición X
+const TY    = new Float32Array(MAX_E);    // posición Y
+const VX    = new Float32Array(MAX_E);    // velocidad X
+const VY    = new Float32Array(MAX_E);    // velocidad Y
+const RW    = new Uint8Array(MAX_E);      // ancho de render/hitbox
+const RH    = new Uint8Array(MAX_E);      // alto de render/hitbox
+const RTYPE = new Uint8Array(MAX_E);      // 0 = dinosaurio, 1 = cactus, 2 = pterodáctilo
+const RSUB  = new Uint8Array(MAX_E);      // subtipo: cactus 0=pequeño 1=grande; ptero 0=bajo 1=alto
+const scored = new Uint8Array(MAX_E);     // obstáculo ya puntuado
+
+function entityAlloc() { return freeList.length ? freeList.pop() : -1; }
+function entityFree(id) { if (aliveBit[id]) { aliveBit[id] = 0; freeList.push(id); } }  // Object Pooling (spec.md §4B)
+function clearEntities() { for (let i = 0; i < MAX_E; i++) entityFree(i); }
+
+/* ── Constantes y estado de partida ────────────────────────── */
+const DINO_X = 64, D_STAND_W = 16, D_STAND_H = 18, D_DUCK_W = 24, D_DUCK_H = 10;
+const GRAVITY = 2000, JUMP_V = -520, TERM_V = 620, FAST_FALL = 2600;  // px/s², px/s
+const VICTORY_SCORE = 50;                              // puntuación objetivo (victoria)
+
+let gameSpeed, difficulty, spawnCountdown, nextGap, playerID, scrollX, onGround, duckHeld;
+
+function enterGameplay() {
+    clearEntities();
+    score = 0; won = false; night = false;
+    gameSpeed = 150; difficulty = 1.0;
+    spawnCountdown = 0; nextGap = 0; duckHeld = false; onGround = true;
+    playerID = entityAlloc();
+    TX[playerID] = DINO_X; TY[playerID] = GROUND_Y - D_STAND_H;
+    VX[playerID] = 0;  VY[playerID] = 0;
+    RW[playerID] = D_STAND_W; RH[playerID] = D_STAND_H;
+    RTYPE[playerID] = 0; scored[playerID] = 0;
+    aliveBit[playerID] = 1;
+    spawnObstacle();                                   // primer obstáculo ya en camino
+}
+function exitGameplay() { clearEntities(); playerID = -1; duckHeld = false; onGround = false; }
+
+/* Spawn procedural: el hueco se calcula en tiempo (≈0.55-1.15 s tras el
+   obstáculo) para que siempre sea superable, y se estrecha algo con la
+   dificultad. Grupos pequeños: saltos limpios garantizados. */
+function spawnObstacle() {
+    const id = entityAlloc();
+    if (id < 0) return;
+    let wSpawn = 20;                                     // ancho total ocupado por el spawn
+    const pteroChance = score >= 20 ? Math.min(0.3, 0.12 + difficulty * 0.02) : 0;
+    if (Math.random() < pteroChance) {
+        // Pterodáctilo: 0 = bajo (hay que agacharse), 1 = alto (pasa por encima)
+        const high = Math.random() < 0.5;
+        const h = 12;
+        TX[id] = VW + 8;
+        TY[id] = GROUND_Y - (high ? 40 : 14) - h;
+        RW[id] = 20; RH[id] = h;
+        RTYPE[id] = 2; RSUB[id] = high ? 1 : 0;
+        scored[id] = 0;
+        aliveBit[id] = 1;
+    } else {
+        // Cactus: pequeño (6x16) en grupos de 1-2, o grande (10x24) suelto
+        const big = Math.random() < 0.35;
+        const w = big ? 10 : 6, h = big ? 24 : 16;
+        const count = big ? 1 : 1 + (Math.random() * 2 | 0);
+        wSpawn = count * (w + 2) - 2;
+        for (let k = 0; k < count; k++) {
+            const cid = k === 0 ? id : entityAlloc();
+            if (cid < 0) break;
+            TX[cid] = VW + 8 + k * (w + 2);           // cactus contiguos del grupo
+            TY[cid] = GROUND_Y - h;
+            RW[cid] = w; RH[cid] = h;
+            RTYPE[cid] = 1; RSUB[cid] = big ? 1 : 0;
+            scored[cid] = 0;
+            aliveBit[cid] = 1;
+        }
+    }
+    const relax = 1 - Math.min(0.15, difficulty * 0.015);
+    nextGap = wSpawn + gameSpeed * (0.55 + Math.random() * 0.6) * relax;
+}
+
+/* ── Sistemas ECS (lógica pura sobre los SOA) ──────────────── */
+
+// System: física — gravedad, salto, agacharse, suelo y reciclaje
+function sysPhysics(dt) {
+    const id = playerID;
+    // Agacharse (solo en suelo): cambia el tamaño del sprite/hitbox
+    const ducking = duckHeld && onGround;
+    const nw = ducking ? D_DUCK_W : D_STAND_W, nh = ducking ? D_DUCK_H : D_STAND_H;
+    if (RW[id] !== nw) { RW[id] = nw; RH[id] = nh; TY[id] = GROUND_Y - nh; }
+
+    VY[id] += (duckHeld && !onGround ? GRAVITY + FAST_FALL : GRAVITY) * dt;  // aleteo = caída rápida
+    if (VY[id] > TERM_V) VY[id] = TERM_V;
+    TY[id] += VY[id] * dt;
+    if (TY[id] < 0) { TY[id] = 0; VY[id] = 0; }         // techo: rebote suave
+
+    onGround = false;
+    if (TY[id] + nh >= GROUND_Y) { TY[id] = GROUND_Y - nh; VY[id] = 0; onGround = true; }
+
+    for (let i = 0; i < MAX_E; i++) {
+        if (!aliveBit[i] || RTYPE[i] === 0) continue;
+        VX[i] = -gameSpeed;                             // el mundo se desplaza hacia la izquierda
+        TX[i] += VX[i] * dt;
+        if (TX[i] + RW[i] < -2) entityFree(i);          // fuera de pantalla → recicla
+    }
+}
+
+// System: spawning procedural — un obstáculo por hueco temporal
+function sysSpawn(dt) {
+    spawnCountdown += gameSpeed * dt;
+    if (spawnCountdown >= nextGap) { spawnCountdown = 0; spawnObstacle(); }
+}
+
+// System: progresión de dificultad, ciclo día/noche y puntuación
+function sysProgress(dt) {
+    difficulty += dt * 0.06;
+    gameSpeed = Math.min(260, 150 + difficulty * 7);
+    const wantNight = Math.floor(score / 25) % 2 === 1; // 0-24 día, 25-49 noche
+    night = wantNight;
+    for (let i = 0; i < MAX_E; i++) {
+        if (aliveBit[i] && RTYPE[i] !== 0 && !scored[i] && TX[i] + RW[i] < TX[playerID]) {
+            scored[i] = 1;
+            score += 1;
+        }
+    }
+}
+
+// System: colisiones AABB — dinosaurio vs obstáculos
+function sysCollide() {
+    const px = TX[playerID] + 1, pw = RW[playerID] - 2;  // hitbox un poco menor que el sprite
+    const py = TY[playerID] + 1, ph = RH[playerID] - 2;
+    for (let i = 0; i < MAX_E; i++) {
+        if (!aliveBit[i] || RTYPE[i] === 0) continue;
+        if (px + pw <= TX[i] || px >= TX[i] + RW[i]) continue;   // sin solape horizontal
+        if (py + ph <= TY[i] || py >= TY[i] + RH[i]) continue;   // sin solape vertical
+        endGame(false);
+        return;
+    }
+}
+
+function endGame(victory) {
+    won = victory;
+    if (score > highScore) highScore = score;
+    setHigh(highScore);
+    duckHeld = false;
+    goTo(STATE.GAME_OVER);
+}
+
+/* ═══════════════ Render (parallax + sprites + HUD) ══════════ */
+const CLOUDS = [], HILLS_FAR = [], HILLS_NEAR = [], SPECKS = [], STARS = [];
+for (let i = 0; i < 8;  i++) CLOUDS.push({ x: Math.random() * VW, y: 20 + Math.random() * 60, w: 16 + Math.random() * 24 });
+for (let i = 0; i < 9;  i++) HILLS_FAR.push({ x: i * 58 + Math.random() * 16, w: 44 + Math.random() * 26, h: 22 + Math.random() * 30 });
+for (let i = 0; i < 10; i++) HILLS_NEAR.push({ x: i * 52 + Math.random() * 14, w: 30 + Math.random() * 20, h: 10 + Math.random() * 16 });
+for (let i = 0; i < 26; i++) SPECKS.push({ x: Math.random() * VW, w: 1 + (Math.random() * 3 | 0) });
+for (let i = 0; i < 22; i++) STARS.push({ x: Math.random() * VW, y: Math.random() * (GROUND_Y - 70), p: Math.random() * 6.28 });
+
+// Envuelve X en [-w, VW): el objeto entra por la derecha y sale por la izquierda
+function wrapX(x, w) {
+    const span = VW + w;
+    return (((x + w) % span) + span) % span - w;
+}
+
+function beginFrame() {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = pal().sky;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(viewScale, 0, 0, viewScale, viewOX, viewOY);
+}
+
+function drawParallax() {
+    const p = pal();
+    // Sol (día) o luna (noche) — casi estático (2 %)
+    ctx.fillStyle = night ? '#e8ecf5' : '#ffd93d';
+    const sx = wrapX(VW - 70 - scrollX * 0.02, 16);
+    ctx.beginPath(); ctx.arc(sx + 8, 44, 8, 0, Math.PI * 2); ctx.fill();
+    if (night) { ctx.fillStyle = p.sky; ctx.fillRect(sx + 5, 40, 3, 3); ctx.fillRect(sx + 10, 47, 2, 2); }
+    // Estrellas (solo de noche, parpadeo sinusoidal)
+    if (night) {
+        for (let i = 0; i < STARS.length; i++) {
+            const s = STARS[i];
+            ctx.globalAlpha = 0.4 + 0.6 * Math.abs(Math.sin(animTime * 2 + s.p));
+            ctx.fillStyle = p.star;
+            ctx.fillRect(s.x | 0, s.y | 0, 1, 1);
+        }
+        ctx.globalAlpha = 1;
+    }
+    // Capa 1: nubes (10 %)
+    ctx.fillStyle = p.cloud;
+    const s1 = scrollX * 0.10;
+    for (let i = 0; i < CLOUDS.length; i++) {
+        const c = CLOUDS[i];
+        ctx.fillRect(wrapX(c.x - s1, c.w) | 0, c.y | 0, c.w | 0, 3);
+    }
+    // Capa 2: colinas lejanas (15 %)
+    ctx.fillStyle = p.hillFar;
+    const s2 = scrollX * 0.15;
+    for (let i = 0; i < HILLS_FAR.length; i++) {
+        const h = HILLS_FAR[i];
+        ctx.fillRect(wrapX(h.x - s2, h.w) | 0, (GROUND_Y - h.h) | 0, h.w | 0, h.h | 0);
+    }
+    // Capa 3: colinas cercanas (35 %)
+    ctx.fillStyle = p.hillNear;
+    const s3 = scrollX * 0.35;
+    for (let i = 0; i < HILLS_NEAR.length; i++) {
+        const h = HILLS_NEAR[i];
+        ctx.fillRect(wrapX(h.x - s3, h.w) | 0, (GROUND_Y - h.h) | 0, h.w | 0, h.h | 0);
+    }
+    // Suelo (100 %): franja, línea y moteles procedurales
+    ctx.fillStyle = p.ground;
+    ctx.fillRect(0, GROUND_Y, VW, VH - GROUND_Y);
+    ctx.fillStyle = p.line;
+    ctx.fillRect(0, GROUND_Y, VW, 1);
+    ctx.fillStyle = p.stripe;
+    const gs = scrollX % 24;
+    for (let x = -24; x < VW + 24; x += 24) ctx.fillRect((x - gs) | 0, GROUND_Y + 8, 12, 2);
+    for (let i = 0; i < SPECKS.length; i++) {
+        const s = SPECKS[i];
+        ctx.fillRect(wrapX(s.x - scrollX, s.w) | 0, GROUND_Y + 4 + (i % 3) * 5, s.w, 1);
+    }
+}
+
+/* Sprites de pixel-art compuestos con rectángulos */
+function drawDinoSprite(x, y, ducking, legFrame, airborne) {
+    x = x | 0; y = y | 0;
+    if (ducking) {
+        // ctx.fillStyle = COL_CYAN; ctx.fillRect(x + 1, y + 1, D_DUCK_W, D_DUCK_H);
+        // ctx.fillStyle = COL_MAG;  ctx.fillRect(x - 1, y - 1, D_DUCK_W, D_DUCK_H);
+        ctx.fillStyle = COL_DINO;
+        ctx.fillRect(x, y + 2, 18, 6);                  // cuerpo
+        ctx.fillRect(x + 15, y, 9, 6);                  // cabeza estirada
+        ctx.fillRect(x, y + 1, 4, 3);                   // cola
+        ctx.fillStyle = COL_DINO_DARK; ctx.fillRect(x + 21, y + 2, 1, 1);  // ojo
+        ctx.fillStyle = COL_DINO;
+        if (legFrame) { ctx.fillRect(x + 4, y + 8, 4, 2); ctx.fillRect(x + 14, y + 8, 4, 2); }
+        else          { ctx.fillRect(x + 6, y + 8, 4, 2); ctx.fillRect(x + 11, y + 8, 4, 2); }
+    } else {
+        // ctx.fillStyle = COL_CYAN; ctx.fillRect(x + 1, y + 1, D_STAND_W, D_STAND_H);
+        // ctx.fillStyle = COL_MAG;  ctx.fillRect(x - 1, y - 1, D_STAND_W, D_STAND_H);
+        ctx.fillStyle = COL_DINO;
+        ctx.fillRect(x + 9, y, 7, 8);                   // cabeza
+        ctx.fillRect(x + 2, y + 7, 10, 8);              // cuerpo
+        ctx.fillRect(x, y + 5, 3, 4);                   // cola
+        ctx.fillRect(x + 9, y + 9, 3, 2);               // brazo
+        ctx.fillStyle = COL_DINO_DARK; ctx.fillRect(x + 13, y + 2, 1, 1);  // ojo
+        ctx.fillStyle = COL_DINO;
+        if (airborne)     { ctx.fillRect(x + 3, y + 15, 4, 3); ctx.fillRect(x + 9, y + 14, 4, 4); }  // patas en salto
+        else if (legFrame){ ctx.fillRect(x + 3, y + 15, 3, 3); ctx.fillRect(x + 9, y + 15, 3, 3); }  // paso A
+        else              { ctx.fillRect(x + 5, y + 15, 3, 3); ctx.fillRect(x + 7, y + 15, 3, 3); }  // paso B
+    }
+}
+
+function drawCactus(x, y, w, big) {
+    x = x | 0; y = y | 0;
+    const h = big ? 24 : 16;
+    ctx.fillStyle = COL_CYAN; ctx.fillRect(x + 1, y + 1, w, h);
+    ctx.fillStyle = COL_MAG;  ctx.fillRect(x - 1, y - 1, w, h);
+    ctx.fillStyle = pal().cactus;
+    ctx.fillRect(x, y, w, h);                          // tronco
+    if (big) { ctx.fillRect(x - 2, y + 6, 2, 7); ctx.fillRect(x + w, y + 10, 2, 6); }
+    else     { ctx.fillRect(x - 2, y + 4, 2, 5); }
+}
+
+function drawPtero(x, y, high) {
+    x = x | 0; y = y | 0;
+    const f = (animTime * 6 | 0) % 2;                   // aleteo 2 fotogramas
+    ctx.fillStyle = COL_CYAN; ctx.fillRect(x + 1, y + 1, 20, 12);
+    ctx.fillStyle = COL_MAG;  ctx.fillRect(x - 1, y - 1, 20, 12);
+    ctx.fillStyle = pal().ptero;
+    ctx.fillRect(x, y + 4, 16, 4);                      // cuerpo
+    ctx.fillRect(x + 14, y + 2, 6, 4);                  // cabeza
+    ctx.fillRect(x, y + 5, 3, 2);                       // cola
+    if (f) ctx.fillRect(x + 4, y, 8, 4); else ctx.fillRect(x + 4, y + 8, 8, 4);  // ala arriba/abajo
+    ctx.fillStyle = COL_DINO_DARK;
+    ctx.fillRect(x + 17, y + 3, 1, 1);                  // ojo
+    ctx.fillRect(x + 19, y + 4, 2, 1);                  // pico
+}
+
+function drawObstacles() {
+    for (let i = 0; i < MAX_E; i++) {
+        if (!aliveBit[i] || RTYPE[i] === 0) continue;
+        if (RTYPE[i] === 1) drawCactus(TX[i], TY[i], RW[i], RSUB[i] === 1);
+        else drawPtero(TX[i], TY[i], RSUB[i] === 1);
+    }
+}
+
+function drawHUD() {
+    drawText(String(score), VW / 2, 20, 20);
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = COL_WHITE;
+    ctx.fillText('MEJOR ' + highScore, VW - 10, 14);
+}
+
+function drawWorld() {
+    drawParallax();
+    drawObstacles();
+    if (playerID >= 0 && aliveBit[playerID]) {
+        drawDinoSprite(TX[playerID], TY[playerID], RH[playerID] === D_DUCK_H,
+                       (animTime * 8 | 0) % 2, !onGround);
+    }
+    drawHUD();
+}
+
+/* ── Estados: Enter / Update / Draw ────────────────────────── */
+
+// BOOT: "Otomatico" ~2 s (Readme.md §A)
+function enterBoot() {}
+function updateBoot() { if (stateTimer > 2000) goTo(STATE.MAIN_MENU); }
+function drawBoot() {
+    beginFrame();
+    drawChromaText('OTOMATICO', VW / 2, VH / 2, 40);
+}
+
+// MAIN_MENU: título + "Iniciar juego" con fade 500 ms (Readme.md §B)
+function enterMainMenu() {}
+function updateMainMenu(dt) { scrollX += 40 * dt; }
+function drawMainMenu() {
+    beginFrame();
+    drawParallax();
+    drawChromaText('T-REX DASH', VW / 2, VH / 3, 40);
+    drawDinoSprite(VW / 2 - 8, GROUND_Y - D_STAND_H, false, (animTime * 8 | 0) % 2, false);
+    const phase = (stateTimer % 1000) / 1000;           // 500 ms sube + 500 ms baja
+    ctx.globalAlpha = phase < 0.5 ? phase * 2 : (1 - phase) * 2;
+    drawText('Iniciar juego', VW / 2, VH * 2 / 3 + 20, 20);
+    ctx.globalAlpha = 1;
+    drawText('Récord: ' + highScore, VW / 2, VH - 24, 14);
+}
+
+// GAMEPLAY: ECS systems (spec.md Resumen de Ejecución)
+function updateGameplay(dt) {
+    scrollX += gameSpeed * dt;
+    animTime += dt;
+    sysPhysics(dt);
+    sysSpawn(dt);
+    sysProgress(dt);
+    sysCollide();
+    if (state === STATE.GAMEPLAY && score >= VICTORY_SCORE) endGame(true);
+}
+function drawGameplay() {
+    beginFrame();
+    drawWorld();
+}
+
+// GAME_OVER: escena congelada + overlay + texto (Readme.md §C)
+function enterGameOver() {}
+function updateGameOver() {}
+function drawGameOver() {
+    beginFrame();
+    drawWorld();                                          // mundo congelado
+    ctx.fillStyle = 'rgba(5,6,20,0.72)';
+    ctx.fillRect(0, 0, VW, VH);
+    drawChromaText(won ? 'VICTORY' : 'YOU LOSER', VW / 2, VH / 3, 44);
+    drawText('Puntaje: ' + score + '   Récord: ' + highScore, VW / 2, VH / 2 + 10, 16);
+    if (stateTimer > 400 && (stateTimer % 800) < 400) {
+        drawText('ESPACIO o TAP para menú', VW / 2, VH * 2 / 3 + 24, 14);
+    }
+}
+
+/* ── Bucle principal ───────────────────────────────────────── */
+function update(dt) {                                        // dt en ms
+    stateTimer += dt;
+    const ds = dt / 1000;                                    // dt en segundos
+    switch (state) {
+        case STATE.BOOT:       updateBoot();            break;
+        case STATE.MAIN_MENU:  updateMainMenu(ds);      break;
+        case STATE.GAMEPLAY:   updateGameplay(ds);      break;
+        case STATE.GAME_OVER:  updateGameOver();        break;
+    }
+}
+
+function draw() {
+    switch (state) {
+        case STATE.BOOT:       drawBoot();       break;
+        case STATE.MAIN_MENU:  drawMainMenu();   break;
+        case STATE.GAMEPLAY:   drawGameplay();   break;
+        case STATE.GAME_OVER:  drawGameOver();   break;
+    }
+}
+
+let lastTime = performance.now();
+function loop(now) {
+    const dt = Math.min(now - lastTime, 50);                 // cap anti-salto de timestep
+    lastTime = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+}
+
+/* ── Input ─────────────────────────────────────────────────── */
+function jump() {
+    if (state === STATE.GAMEPLAY && onGround) {
+        VY[playerID] = JUMP_V;
+        onGround = false;
+    }
+}
+function onAction() {
+    if (state === STATE.BOOT)           goTo(STATE.MAIN_MENU);
+    else if (state === STATE.MAIN_MENU) goTo(STATE.GAMEPLAY);
+    else if (state === STATE.GAMEPLAY)  jump();
+    else if (state === STATE.GAME_OVER && stateTimer > 400) goTo(STATE.MAIN_MENU);
+}
+
+document.addEventListener('keydown', e => {
+    if (e.repeat) return;                                    // sin auto-repetición
+    if (e.code === 'Space' || e.code === 'ArrowUp' || e.key === 'Enter') { e.preventDefault(); onAction(); }
+    else if (e.code === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        duckHeld = true;
+        if (state === STATE.GAMEPLAY && !onGround) VY[playerID] += FAST_FALL * 0.04;  // empuje inicial al agacharse en aire
+    }
+});
+document.addEventListener('keyup', e => {
+    if (e.code === 'ArrowDown' || e.key === 's' || e.key === 'S') duckHeld = false;
+});
+canvas.addEventListener('pointerdown', e => { e.preventDefault(); onAction(); });  // cubre ratón y táctil
+
+/* ── Arranque ──────────────────────────────────────────────── */
+resize();
+scrollX = 0;
+goTo(STATE.BOOT);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

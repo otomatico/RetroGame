@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Turbo Racer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+  }
+  canvas {
+    border: 2px solid #333;
+    image-rendering: pixelated;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" width="400" height="600"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// === ESTÉTICA GLOBAL ===
+const TEXT_SHADOWS = [
+  { x: -2, y: -2, color: '#0ff' },
+  { x: 2, y: 2, color: '#f0f' }
+];
+
+function drawCenteredText(text, y, size, alpha) {
+  ctx.globalAlpha = alpha !== undefined ? alpha : 1;
+  ctx.font = `bold ${size}px 'Courier New', monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Sombras cyan y magenta
+  TEXT_SHADOWS.forEach(s => {
+    ctx.fillStyle = s.color;
+    ctx.fillText(text, canvas.width / 2 + s.x, y + s.y);
+  });
+
+  // Texto blanco principal
+  ctx.fillStyle = '#fff';
+  ctx.fillText(text, canvas.width / 2, y);
+  ctx.globalAlpha = 1;
+}
+
+// === ARQUITECTURA FSM ===
+const States = { BOOT: 'boot', MENU: 'menu', PLAYING: 'playing', GAMEOVER: 'gameover' };
+let currentState = States.BOOT;
+let stateTimer = 0;
+
+// === BOOT ===
+function bootUpdate(dt) {
+  stateTimer += dt;
+  if (stateTimer >= 2000) {
+    currentState = States.MENU;
+    stateTimer = 0;
+  }
+}
+
+function bootDraw() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawCenteredText('Otomatico', canvas.height / 2, 36);
+}
+
+// === MENU PRINCIPAL ===
+let menuBlinkTimer = 0;
+function menuUpdate(dt) {
+  menuBlinkTimer += dt;
+}
+
+function menuDraw() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawCenteredText('Turbo Racer', canvas.height / 2 - 60, 38);
+
+  // Texto parpadeante "Iniciar juego" cada 500ms
+  const blink = Math.floor(menuBlinkTimer / 500) % 2;
+  const alpha = blink ? 1 : 0.2;
+  drawCenteredText('Iniciar juego', canvas.height / 2 + 100, 24, alpha);
+
+  // Instrucción secundaria parpadeante con período diferente
+  const subBlink = Math.floor(menuBlinkTimer / 800) % 2;
+  const subAlpha = subBlink ? 1 : 0.3;
+  drawCenteredText('← → Mover', canvas.height / 2 + 150, 16, subAlpha);
+
+  // Indicador de estado
+  const stateText = currentState === States.MENU ? '▸ MENU ◂' : '';
+  ctx.globalAlpha = 0.4;
+  drawCenteredText(stateText, 30, 12);
+  ctx.globalAlpha = 1;
+}
+
+// === GAMEPLAY - CARRERAS VERTICAL ===
+const ROAD_LEFT = 60;
+const ROAD_RIGHT = canvas.width - 60;
+const ROAD_WIDTH = ROAD_RIGHT - ROAD_LEFT;
+const LANE_COUNT = 3;
+const LANE_WIDTH = ROAD_WIDTH / LANE_COUNT;
+
+let player, enemies, roadOffset, score, lives, gameSpeed, maxScore;
+let keysDown = {};
+let lastTime = 0;
+
+function initGameplay() {
+  // Jugador
+  const startX = canvas.width / 2 - 20;
+  player = {
+    x: startX, y: canvas.height - 120,
+    w: 40, h: 60, speed: 5, color: '#0f0'
+  };
+
+  enemies = [];
+  roadOffset = 0;
+  score = 0;
+  lives = 3;
+  gameSpeed = 2;
+  maxScore = 100 + 50; // Meta para ganar
+}
+
+function spawnEnemy() {
+  const lane = Math.floor(Math.random() * LANE_COUNT);
+  const x = ROAD_LEFT + lane * LANE_WIDTH + (LANE_WIDTH - 36) / 2;
+  const colors = ['#f44', '#ff0', '#f0f', '#fff'];
+  enemies.push({
+    x: x, y: -70,
+    w: 36, h: 58,
+    speed: gameSpeed * (0.7 + Math.random() * 0.6),
+    color: colors[Math.floor(Math.random() * colors.length)]
+  });
+}
+
+let enemyTimer = 0;
+
+function gameplayUpdate(dt) {
+  // Mover jugador
+  if (keysDown['ArrowLeft'] || keysDown['a']) {
+    player.x -= player.speed * (dt / 16);
+  }
+  if (keysDown['ArrowRight'] || keysDown['d']) {
+    player.x += player.speed * (dt / 16);
+  }
+
+  // Limitar a la carretera
+  if (player.x < ROAD_LEFT + 2) player.x = ROAD_LEFT + 2;
+  if (player.x + player.w > ROAD_RIGHT - 2) player.x = ROAD_RIGHT - 2 - player.w;
+
+  // Scroll de carretera
+  roadOffset += gameSpeed * (dt / 16) * 3;
+  if (roadOffset >= 80) roadOffset -= 80;
+
+  // Spawn enemigos
+  enemyTimer += dt;
+  const spawnRate = Math.max(400, 1200 - score * 5);
+  if (enemyTimer >= spawnRate) {
+    spawnEnemy();
+    enemyTimer = 0;
+  }
+
+  // Mover y verificar enemigos
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    e.y += e.speed * (dt / 16);
+
+    // Colisión con jugador
+    if (e.x < player.x + player.w &&
+        e.x + e.w > player.x &&
+        e.y < player.y + player.h &&
+        e.y + e.h > player.y) {
+      lives--;
+      enemies.splice(i, 1);
+      // Flash rojo
+      ctx.fillStyle = 'rgba(255,0,0,0.3)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (lives <= 0) {
+        currentState = States.GAMEOVER;
+        stateTimer = 0;
+        return;
+      }
+      continue;
+    }
+
+    // Eliminar si sale de pantalla y sumar puntos
+    if (e.y > canvas.height) {
+      enemies.splice(i, 1);
+      score += Math.floor(gameSpeed * 1.5);
+
+      // Aumentar dificultad progresiva
+      gameSpeed = 2 + score / 40;
+      maxScore = 100 + Math.floor(score * 0.8) + 50;
+    }
+  }
+
+  // Meta alcanzada
+  if (score >= maxScore) {
+    currentState = States.GAMEOVER;
+    stateTimer = 0;
+    window._victory = true;
+    return;
+  }
+}
+
+function gameplayDraw() {
+  // Fondo de hierba
+  ctx.fillStyle = '#1a5c1a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Carretera
+  ctx.fillStyle = '#2a2a2a';
+  ctx.fillRect(ROAD_LEFT, 0, ROAD_WIDTH, canvas.height);
+
+  // Bordes de carretera (rastro)
+  ctx.fillStyle = '#fff';
+  for (let y = -80 + roadOffset; y < canvas.height; y += 80) {
+    ctx.fillRect(ROAD_LEFT - 4, y, 6, 30);
+    ctx.fillRect(ROAD_RIGHT - 2, y, 6, 30);
+  }
+
+  // Líneas discontinuas del centro
+  ctx.fillStyle = '#ff0';
+  for (let lane = 1; lane < LANE_COUNT; lane++) {
+    const lx = ROAD_LEFT + lane * LANE_WIDTH - 2;
+    for (let y = roadOffset; y < canvas.height; y += 60) {
+      ctx.fillRect(lx, y, 4, 30);
+    }
+  }
+
+  // Árboles/decoración lateral
+  for (let y = -80 + roadOffset; y < canvas.height; y += 120) {
+    drawTree(ROAD_LEFT - 30, y);
+    drawTree(ROAD_RIGHT + 15, y + 60);
+  }
+
+  // Enemigos (coches rivales)
+  enemies.forEach(e => {
+    drawCar(e.x, e.y, e.w, e.h, e.color, false);
+  });
+
+  // Jugador
+  drawCar(player.x, player.y, player.w, player.h, '#0f0', true);
+
+  // HUD
+  drawCenteredText(`Score: ${score}`, 25, 18);
+
+  // Vidas (corazones)
+  const heartY = canvas.height - 30;
+  for (let i = 0; i < lives; i++) {
+    ctx.fillStyle = '#f00';
+    ctx.font = '24px serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('♥', 15 + i * 28, heartY);
+  }
+
+  // Progreso
+  const progress = Math.min(score / maxScore, 1);
+  ctx.fillStyle = '#333';
+  ctx.fillRect(canvas.width - 100, canvas.height - 20, 70, 8);
+  ctx.fillStyle = '#ff0';
+  ctx.fillRect(canvas.width - 100, canvas.height - 20, 70 * progress, 8);
+}
+
+function drawCar(x, y, w, h, color, isPlayer) {
+  // Cuerpo principal
+  ctx.fillStyle = color;
+  ctx.fillRect(x + 4, y + 10, w - 8, h - 20);
+
+  // Parabrisas / techo
+  ctx.fillStyle = isPlayer ? '#0a0' : '#555';
+  ctx.fillRect(x + 8, y + 15, w - 16, h * 0.3);
+
+  // Ruedas
+  ctx.fillStyle = '#222';
+  ctx.fillRect(x, y + 8, 4, 12);
+  ctx.fillRect(x + w - 4, y + 8, 4, 12);
+  ctx.fillRect(x, y + h - 20, 4, 12);
+  ctx.fillRect(x + w - 4, y + h - 20, 4, 12);
+
+  // Faros
+  if (isPlayer) {
+    ctx.fillStyle = '#ff0';
+    ctx.fillRect(x + 6, y, 8, 5);
+    ctx.fillRect(x + w - 14, y, 8, 5);
+    // Luces traseras rojas
+    ctx.fillStyle = '#f00';
+    ctx.fillRect(x + 6, y + h - 5, 8, 5);
+    ctx.fillRect(x + w - 14, y + h - 5, 8, 5);
+  } else {
+    // Faros delanteros (abajo para enemigos)
+    ctx.fillStyle = '#ff0';
+    ctx.fillRect(x + 6, y + h - 5, 8, 5);
+    ctx.fillRect(x + w - 14, y + h - 5, 8, 5);
+  }
+}
+
+function drawTree(x, y) {
+  // Tronco
+  ctx.fillStyle = '#5a3a1a';
+  ctx.fillRect(x + 6, y + 20, 8, 15);
+  // Copa
+  ctx.fillStyle = '#2d7a2d';
+  ctx.beginPath();
+  ctx.arc(x + 10, y + 12, 14, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// === GAME OVER ===
+let gameOverTimer = 0;
+function gameoverUpdate(dt) {
+  gameOverTimer += dt;
+}
+
+function gameoverDraw() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+  if (window._victory) {
+    drawCenteredText('Victory', canvas.height / 2 - 40, 42);
+    drawCenteredText('Score: ' + score, canvas.height / 2 + 30, 24);
+  } else {
+    drawCenteredText('You Loser', canvas.height / 2 - 40, 42);
+    drawCenteredText('Score: ' + score, canvas.height / 2 + 30, 24);
+  }
+
+  // Texto parpadeante "Presiona ENTER para reiniciar"
+  const blink = Math.floor(gameOverTimer / 500) % 2;
+  drawCenteredText('ENTER Reiniciar', canvas.height / 2 + 100, 20, blink ? 1 : 0.3);
+}
+
+// === MAIN LOOP ===
+function gameLoop(timestamp) {
+  const dt = lastTime ? timestamp - lastTime : 16;
+  lastTime = timestamp;
+
+  // Limpiar
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  switch (currentState) {
+    case States.BOOT:
+      bootUpdate(dt);
+      bootDraw();
+      break;
+    case States.MENU:
+      menuUpdate(dt);
+      menuDraw();
+      break;
+    case States.PLAYING:
+      gameplayUpdate(dt);
+      gameplayDraw();
+      break;
+    case States.GAMEOVER:
+      gameoverUpdate(dt);
+      gameoverDraw();
+      break;
+  }
+
+  // Indicador de estado en esquina superior izquierda
+  ctx.globalAlpha = 0.3;
+  ctx.fillStyle = '#fff';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(currentState, 5, canvas.height - 5);
+  ctx.globalAlpha = 1;
+
+  requestAnimationFrame(gameLoop);
+}
+
+// === INPUT ===
+window.addEventListener('keydown', e => {
+  keysDown[e.key] = true;
+
+  if (e.key === 'Enter') {
+    switch (currentState) {
+      case States.MENU:
+        window._victory = false;
+        initGameplay();
+        currentState = States.PLAYING;
+        break;
+      case States.GAMEOVER:
+        window._victory = false;
+        initGameplay();
+        currentState = States.MENU;
+        menuBlinkTimer = 0;
+        break;
+    }
+  }
+
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(e.key)) {
+    e.preventDefault();
+  }
+});
+
+window.addEventListener('keyup', e => {
+  keysDown[e.key] = false;
+});
+
+// Click/touch para iniciar
+canvas.addEventListener('click', () => {
+  if (currentState === States.MENU) {
+    window._victory = false;
+    initGameplay();
+    currentState = States.PLAYING;
+  } else if (currentState === States.GAMEOVER) {
+    window._victory = false;
+    initGameplay();
+    currentState = States.MENU;
+    menuBlinkTimer = 0;
+  }
+});
+
+// === INICIAR ===
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>

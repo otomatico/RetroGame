@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Sky Ace - RetroGame</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #111;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+        }
+        canvas {
+            background-color: black;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.2);
+            image-rendering: pixelated;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="game" width="480" height="640"></canvas>
+    <script>
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+
+        // --- ESTADO GLOBAL ---
+        const STATE = {
+            BOOT: 'boot',
+            MAINMENU: 'mainmenu',
+            PLAYING: 'playing',
+            GAMEOVER: 'gameover'
+        };
+
+        let currentState = STATE.BOOT;
+        let lastTime = 0;
+        
+        // --- VARIABLES DE JUEGO ---
+        const FPS = 60;
+        let player = { 
+            x: 240, y: 500, w: 30, h: 30, speed: 200, hp: 3, shield: false,
+            spreadTimer: 0, invincibleTimer: 0, rapidFireTimer: 0,
+            fireAccumulator: 0 // Acumulador de tiempo para auto-fire robusto
+        };
+        let keys = {};
+        let projectiles = [];
+        let enemies = [];
+        let powerUps = [];
+        let particles = [];
+        let score = 0;
+        let frameCount = 0;
+        
+        // --- BOSS ---
+        let boss = null;
+        let bossDefeated = false;
+        let bossDeadTimer = 0;
+
+        // --- INPUTS ---
+        window.addEventListener('keydown', e => {
+            const k = e.key.toLowerCase(); // Siempre minúscula para 'enter'
+            keys[k] = true;
+            if(['space', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) e.preventDefault();
+        });
+        window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+        canvas.addEventListener('mousedown', () => keys[' '] = true);
+        canvas.addEventListener('mouseup', () => keys[' '] = false);
+
+        // --- UTILIDADES GRÁFICAS (Estilo Otomatico) ---
+        function drawShadowText(text, x, y, size = 40) {
+            ctx.font = `bold ${size}px monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            ctx.shadowColor = 'magenta';
+            ctx.shadowBlur = 15;
+            ctx.fillStyle = 'white';
+            ctx.fillText(text, x + 3, y + 3);
+
+            ctx.shadowColor = 'cyan';
+            ctx.fillStyle = 'white';
+            ctx.fillText(text, x - 3, y - 3);
+
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = 'white';
+            ctx.fillText(text, x, y);
+        }
+
+        function fadeText(text, x, y, size) {
+            const alpha = (Math.sin(frameCount * 0.01) + 1) / 2; 
+            ctx.font = `bold ${size}px monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+            ctx.fillText(text, x, y);
+        }
+
+        function spawnExplosion(x, y, color) {
+            for(let i=0; i<15; i++) {
+                particles.push({
+                    x: x, y: y, 
+                    vx: (Math.random() - 0.5) * 6, 
+                    vy: (Math.random() - 0.5) * 6, 
+                    life: 30 + Math.random() * 20, 
+                    color: color
+                });
+            }
+        }
+
+        // --- LÓGICA DE ESTADOS ---
+        function update(dt) {
+            switch(currentState) {
+                case STATE.BOOT:
+                    if (frameCount > 120) currentState = STATE.MAINMENU; 
+                    break;
+
+                case STATE.MAINMENU:
+                    if (keys['enter'] || keys[' ']) startGame(); // Usa 'enter' minúscula
+                    break;
+
+                case STATE.PLAYING:
+                    updatePlayer(dt);
+                    updateProjectiles(dt);
+                    updateEnemies(dt); 
+                    updatePowerUps(dt);
+                    updateParticles(dt);
+                    checkCollisions();
+
+                    // Boss trigger (solo una vez)
+                    if (score > 100 && !boss && !bossDefeated) {
+                        spawnBoss();
+                    }
+                    
+                    // Handle boss death transition
+                    if (boss && boss.hp <= 0) {
+                        bossDeadTimer += dt;
+                        if (bossDeadTimer > 2.0) { // Timer en segundos reales
+                            boss = null;
+                            score += 500;
+                            bossDefeated = true;
+                            bossDeadTimer = 0;
+                        }
+                    } else if (!boss && bossDefeated) {
+                        bossDeadTimer = 0;
+                    }
+                    break;
+
+                case STATE.GAMEOVER:
+                    if (keys['enter']) resetGame(); // Usa 'enter' minúscula
+                    break;
+            }
+        }
+
+        function updatePlayer(dt) {
+            let moveAmount = player.speed * dt;
+            
+            if ((keys['arrowleft'] || keys['a']) && player.x > 0) player.x -= moveAmount;
+            if ((keys['arrowright'] || keys['d']) && player.x < canvas.width - player.w) player.x += moveAmount;
+            if ((keys['arrowup'] || keys['w']) && player.y > 0) player.y -= moveAmount;
+            if ((keys['arrowdown'] || keys['s']) && player.y < canvas.height - player.h) player.y += moveAmount;
+
+            // Auto-fire logic con acumulador de tiempo (robusto a cambios de pestaña)
+            let fireInterval = (player.rapidFireTimer > 0) ? 0.12 : 0.25; 
+            player.fireAccumulator += dt;
+            
+            if (player.fireAccumulator >= fireInterval) {
+                projectiles.push({ x: player.x + player.w/2 - 2, y: player.y, w: 4, h: 10, speed: 400, type: 'player' });
+                
+                // Spread shot powerup logic
+                if (player.spreadTimer > 0) {
+                    projectiles.push({ x: player.x + player.w/2 - 2, y: player.y, w: 4, h: 10, speed: 400, type: 'player', dx: -3 });
+                    projectiles.push({ x: player.x + player.w/2 - 2, y: player.y, w: 4, h: 10, speed: 400, type: 'player', dx: 3 });
+                }
+                
+                player.fireAccumulator -= fireInterval; // Mantener offset correcto para disparos rápidos
+            }
+            
+            if (player.spreadTimer > 0) player.spreadTimer -= dt;
+            if (player.invincibleTimer > 0) player.invincibleTimer -= dt;
+            if (player.rapidFireTimer > 0) player.rapidFireTimer -= dt;
+        }
+
+        function updateProjectiles(dt) {
+            for (let i = projectiles.length - 1; i >= 0; i--) {
+                let p = projectiles[i];
+                
+                // Aplicar movimiento a X e Y usando sus vectores dx/dy normalizados
+                if (p.type === 'player') {
+                    // Las balas del jugador van hacia arriba (-dy), salvo las laterales que llevan dx
+                    p.y += p.speed * dt * (p.dy || -1); 
+                    if (p.dx) p.x += p.dx * p.speed * 0.5 * dt; 
+                } else {
+                    // Enemigo: si tiene dirección normalizada, la aplica correctamente multiplicada por speed
+                    if (p.dx !== undefined || p.dy !== undefined) {
+                        let len = Math.sqrt(p.dx*p.dx + p.dy*p.dy);
+                        if (len > 0) {
+                            p.x += (p.dx / len) * p.speed * dt;
+                            p.y += (p.dy / len) * p.speed * dt;
+                        } else {
+                            p.y += p.speed * dt; // Fallback por si acaso
+                        }
+                    } else {
+                        p.y += p.speed * dt;
+                    }
+                }
+                
+                if (p.y < -50 || p.y > canvas.height + 50 || p.x < -50 || p.x > canvas.width + 50) projectiles.splice(i, 1);
+            }
+        }
+
+        function updateEnemies(dt) {
+            // Spawn logic
+            if (frameCount % Math.max(30, 60 - Math.floor(score / 50)) === 0 && !boss) {
+                let type = Math.random() > 0.7 ? 'fast' : 'basic';
+                enemies.push({ 
+                    x: Math.random() * (canvas.width - 30), 
+                    y: -40, 
+                    w: 30, h: 30, 
+                    hp: type === 'fast' ? 1 : 2, 
+                    speed: type === 'fast' ? 150 : 80, 
+                    type: type,
+                    shootTimer: Math.random() * 2 // Desfase para no disparar todos a la vez
+                });
+            }
+
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                let e = enemies[i];
+                
+                if (e.hp <= 0) {
+                    spawnExplosion(e.x + e.w/2, e.y + e.h/2, '#f00');
+                    score += 10;
+                    enemies.splice(i, 1);
+                    
+                    // Powerup drop chance
+                    if (Math.random() < 0.15) {
+                        let type = Math.random() > 0.6 ? 'rapid' : (Math.random() > 0.5 ? 'spread' : 'shield');
+                        powerUps.push({ x: e.x, y: e.y, type: type, w: 20, h: 20 });
+                    }
+                } else {
+                    // (1) DEVOLVER EL MOVIMIENTO DE ENEMIGOS
+                    e.y += e.speed * dt; 
+                    
+                    // (ESPEC §4.3) Enemigos normales disparan
+                    if (e.type === 'basic') {
+                        e.shootTimer -= dt;
+                        if (e.shootTimer <= 0 && Math.random() < 0.02) { 
+                             projectiles.push({ 
+                                 x: e.x + e.w/2, y: e.y + e.h, 
+                                 w: 6, h: 6, speed: 150, type: 'enemy' 
+                             });
+                             e.shootTimer = 3; // Reset timer (segundos)
+                        }
+                    }
+
+                    if (e.y > canvas.height) {
+                        enemies.splice(i, 1);
+                    }
+                }
+            }
+            
+            // Update Boss visual movement and behavior
+            if (boss && boss.hp > 0) {
+                let phase = boss.hp > 25 ? 'phase1' : 'phase2';
+                
+                if (phase === 'phase1') {
+                    boss.x += Math.sin(frameCount * 0.02) * 3;
+                } else {
+                    // Phase 2: Más errático
+                    boss.y = 150 + Math.cos(frameCount * 0.01) * 40;
+                    boss.x += Math.sin(frameCount * 0.03) * 4; 
+                }
+                
+                // (3) CLAMP DEL BOSS CORRECTO: límites fijos basados en el ancho del canvas, no en su posición actual
+                let minX = boss.w / 2; 
+                let maxX = canvas.width - boss.w / 2;
+                
+                if (boss.x < minX) boss.x = minX;
+                if (boss.x > maxX) boss.x = maxX;
+                
+                // (4) PATRÓN DE ATAQUE CON DY CORRECTO
+                if (frameCount % (phase === 'phase1' ? 60 : 40) === 0) {
+                    if (phase === 'phase1') {
+                         // Circular pattern
+                        for(let a=0; a<8; a++) {
+                            let angle = (a * Math.PI / 4);
+                            projectiles.push({ 
+                                x: boss.x + boss.w/2, y: boss.y + boss.h, 
+                                w: 6, h: 6, speed: 150, type: 'enemy', 
+                                dx: Math.cos(angle), dy: Math.sin(angle) // Normalizados
+                            });
+                        }
+                    } else {
+                        // Phase 2: Focused aim + spread
+                        projectiles.push({ 
+                            x: boss.x + boss.w/2, y: boss.y + boss.h, 
+                            w: 8, h: 8, speed: 200, type: 'enemy', dx: 0, dy: 1 // Abajo
+                        });
+                         for(let a=0; a<6; a++) {
+                            let angle = (a * Math.PI / 3) - Math.PI/2;
+                            projectiles.push({ 
+                                x: boss.x + boss.w/2, y: boss.y + boss.h, 
+                                w: 6, h: 6, speed: 180, type: 'enemy', 
+                                dx: Math.cos(angle), dy: Math.sin(angle) 
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        function updatePowerUps(dt) {
+            for (let i = powerUps.length - 1; i >= 0; i--) {
+                let pu = powerUps[i];
+                pu.y += 120 * dt; 
+                
+                if (pu.x < player.x + player.w && pu.x + pu.w > player.x &&
+                    pu.y < player.y + player.h && pu.y + pu.h > player.y) {
+                    
+                    // ESPEC §4.5: Rapid Fire implementado correctamente en segundos
+                    if (pu.type === 'spread') player.spreadTimer = 10.0; 
+                    else if (pu.type === 'shield') player.shield = true;
+                    else if (pu.type === 'rapid') player.rapidFireTimer = 8.0;
+                    
+                    spawnExplosion(pu.x, pu.y, '#0ff');
+                    powerUps.splice(i, 1);
+                } else if (pu.y > canvas.height) {
+                    powerUps.splice(i, 1);
+                }
+            }
+        }
+
+        function updateParticles(dt) {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx * dt;
+                p.y += p.vy * dt;
+                p.life -= dt;
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+        }
+
+        function checkCollisions() {
+            // Player vs Enemies Body
+            for (let e of enemies) {
+                if (rectIntersect(player, e)) {
+                    if (player.invincibleTimer <= 0) {
+                        player.hp--;
+                        spawnExplosion(player.x, player.y, '#f00');
+                        e.hp = 0; 
+                        player.invincibleTimer = 1.0; // (5) Timer en segundos reales
+                        checkPlayerDeath();
+                    }
+                    break;
+                }
+            }
+
+            for (let i = projectiles.length - 1; i >= 0; i--) {
+                let p = projectiles[i];
+                
+                if (p.type === 'player') {
+                    // Player vs Boss
+                    if (boss && boss.hp > 0 && rectIntersect(p, boss)) {
+                        boss.hp--;
+                        spawnExplosion(p.x, p.y, '#ff0');
+                        projectiles.splice(i, 1);
+                        continue;
+                    } 
+                    
+                    // Player vs Enemy Body (Bullets)
+                    if (!boss || boss.hp <= 0) {
+                        for (let e of enemies) {
+                            if (rectIntersect(p, e)) {
+                                e.hp--;
+                                spawnExplosion(p.x, p.y, '#ff0');
+                                projectiles.splice(i, 1);
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    // Enemy Bullet vs Player
+                    if (rectIntersect(p, player)) {
+                        if (player.shield) {
+                            player.shield = false;
+                            spawnExplosion(player.x, player.y, '#0ff');
+                            projectiles.splice(i, 1);
+                            continue; 
+                        } else if (player.invincibleTimer <= 0) {
+                            player.hp--;
+                            spawnExplosion(player.x, player.y, '#f00');
+                            player.invincibleTimer = 1.0; // Segundos
+                            checkPlayerDeath();
+                        }
+                        projectiles.splice(i, 1);
+                    }
+                }
+            }
+        }
+
+        function checkPlayerDeath() {
+            if (player.hp <= 0) currentState = STATE.GAMEOVER;
+        }
+
+        function rectIntersect(r1, r2) {
+            return !(r2.x > r1.x + r1.w || 
+                     r2.x + r2.w < r1.x || 
+                     p.y > r1.y + r1.h || 
+                     p.y + p.h < r1.y);
+        }
+
+        function spawnBoss() {
+            boss = { x: canvas.width/2 - 60, y: -100, w: 120, h: 80, hp: 50 };
+        }
+
+        function startGame() {
+            currentState = STATE.PLAYING;
+            player.x = 240;
+            player.y = 500;
+            player.hp = 3;
+            player.shield = false;
+            player.spreadTimer = 0;
+            player.rapidFireTimer = 0;
+            player.invincibleTimer = 0;
+            score = 0;
+            frameCount = 0;
+            enemies = [];
+            projectiles = [];
+            powerUps = [];
+            particles = [];
+            boss = null;
+            bossDefeated = false;
+            bossDeadTimer = 0;
+        }
+
+        function resetGame() {
+            currentState = STATE.MAINMENU;
+            keys['enter'] = false; 
+        }
+
+        // --- RENDERIZADO ---
+        function render() {
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Stars background
+            ctx.fillStyle = '#333';
+            for(let i=0; i<50; i++) {
+                let sx = (i * 47) % canvas.width;
+                let sy = (frameCount * 2 + i * 23) % canvas.height;
+                ctx.fillRect(sx, sy, 1, 1);
+            }
+
+            switch(currentState) {
+                case STATE.BOOT:
+                    drawShadowText("Otomatico", canvas.width / 2, canvas.height / 2, 60);
+                    break;
+
+                case STATE.MAINMENU:
+                    drawShadowText("Sky Ace", canvas.width / 2, canvas.height / 3 - 50, 70);
+                    fadeText("Iniciar juego", canvas.width / 2, canvas.height * 0.6, 40);
+                    break;
+
+                case STATE.PLAYING:
+                    // Player (with invincibility blink)
+                    if (player.invincibleTimer <= 0 || Math.floor(frameCount / 5) % 2 === 0) {
+                        ctx.fillStyle = player.shield ? '#0ff' : '#fff';
+                        ctx.beginPath();
+                        ctx.moveTo(player.x + player.w/2, player.y);
+                        ctx.lineTo(player.x + player.w, player.y + player.h);
+                        ctx.lineTo(player.x + player.w/2, player.y + player.h - 10);
+                        ctx.lineTo(player.x, player.y + player.h);
+                        ctx.fill();
+
+                        if (player.shield) {
+                            ctx.strokeStyle = '#0ff';
+                            ctx.lineWidth = 2;
+                            ctx.beginPath();
+                            ctx.arc(player.x + player.w/2, player.y + player.h/2, 25, 0, Math.PI * 2);
+                            ctx.stroke();
+                        }
+                    }
+
+                    // HUD
+                    ctx.fillStyle = '#fff';
+                    ctx.font = '20px monospace';
+                    ctx.textAlign = 'left';
+                    ctx.fillText(`Score: ${score}`, 15, 30);
+                    for(let i=0; i<player.hp; i++) ctx.fillText('♥', 15 + (i*20), 55);
+
+                    // Projectiles
+                    projectiles.forEach(p => {
+                        ctx.fillStyle = p.type === 'player' ? '#ff0' : '#f00';
+                        ctx.fillRect(p.x, p.y, p.w, p.h);
+                    });
+
+                    // Enemies
+                    enemies.forEach(e => {
+                        ctx.fillStyle = e.type === 'fast' ? '#a0a' : '#888';
+                        ctx.fillRect(e.x, e.y, e.w, e.h);
+                    });
+
+                    // Boss
+                    if (boss) {
+                        let alpha = 1;
+                        if (boss.hp <= 0) {
+                            alpha = Math.max(0, 1 - (bossDeadTimer / 2.0)); 
+                        }
+                        ctx.globalAlpha = alpha;
+                        ctx.fillStyle = '#f00';
+                        ctx.fillRect(boss.x, boss.y, boss.w, boss.h);
+                        
+                        if (boss.hp > 0) {
+                            // Boss HP Bar
+                            ctx.fillStyle = '#300';
+                            ctx.fillRect(boss.x, boss.y - 15, boss.w, 10);
+                            ctx.fillStyle = '#ff0';
+                            ctx.fillRect(boss.x, boss.y - 15, boss.w * (boss.hp / 50), 10);
+                            
+                            // Phase indicator
+                            if (boss.hp <= 25) {
+                                ctx.fillStyle = 'red';
+                                ctx.font = 'bold 10px monospace';
+                                ctx.fillText("WARNING", boss.x + boss.w/2, boss.y - 20);
+                            }
+                        }
+                        ctx.globalAlpha = 1;
+                    }
+
+                    // PowerUps
+                    powerUps.forEach(p => {
+                        let color = (p.type === 'rapid') ? '#f0f' : (p.type === 'spread' ? '#0f0' : '#0ff');
+                        ctx.fillStyle = color;
+                        ctx.font = 'bold 20px monospace';
+                        ctx.textAlign = 'center';
+                        let txt = (p.type === 'rapid') ? 'R' : (p.type === 'spread' ? 'W' : '+');
+                        ctx.fillText(txt, p.x + 10, p.y + 15);
+                    });
+
+                    // Particles
+                    particles.forEach(p => {
+                        ctx.fillStyle = p.color;
+                        ctx.fillRect(p.x, p.y, 3, 3);
+                    });
+
+                    break;
+
+                case STATE.GAMEOVER:
+                    drawShadowText("You Lose", canvas.width / 2, canvas.height / 3 - 50, 70);
+                    fadeText("PULSA ENTER PARA REINICIAR", canvas.width / 2, canvas.height / 2 + 50, 25);
+                    break;
+            }
+        }
+
+        // --- BUCLE PRINCIPAL ---
+        let dt = 1/60;
+        function loop(timestamp) {
+            if (!lastTime) lastTime = timestamp;
+            dt = Math.min((timestamp - lastTime) / 1000, 0.05); 
+            lastTime = timestamp;
+
+            update(dt);
+            render();
+            
+            frameCount++;
+            requestAnimationFrame(loop);
+        }
+
+        requestAnimationFrame(loop);
+
+    </script>
+</body>
+</html>

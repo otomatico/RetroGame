@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RetroBreaker</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            color: white;
+            font-family: 'Courier New', Courier, monospace; /* Fuente retro por defecto */
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        #game-container {
+            position: relative;
+            width: 800px;
+            height: 600px;
+            border: 4px solid #333;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.2), 0 0 20px rgba(255, 0, 255, 0.2);
+        }
+
+        canvas {
+            display: block;
+            background-color: #000;
+        }
+
+        /* Utilidad para textos principales */
+        .retro-text-shadow {
+            text-shadow: 4px 4px cyan, -4px -4px magenta;
+        }
+        
+        .menu-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none; /* Dejar pasar clicks al canvas si es necesario, aunque aquí controlamos con JS */
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Animación fade para "Iniciar Juego" */
+        @keyframes blink-fade {
+            0% { opacity: 1; }
+            50% { opacity: 0.2; }
+            100% { opacity: 1; }
+        }
+
+        .blink-text {
+            animation: blink-fade 0.5s infinite step-start; /* 500ms period */
+            margin-top: 20px;
+            font-size: 24px;
+        }
+
+        h1 {
+            font-size: 60px;
+            margin: 0;
+            text-align: center;
+        }
+
+        h2 {
+            font-size: 32px;
+            margin: 0;
+            text-align: center;
+        }
+
+        .score-board {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 16px;
+            color: cyan;
+        }
+
+        .level-display {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            font-size: 16px;
+            color: magenta;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    
+    <!-- HUD -->
+    <div class="score-board hidden" id="scoreDisplay">PUNTOS: 0</div>
+    <div class="level-display hidden" id="levelDisplay">NIVEL: 1</div>
+
+    <!-- BOOT SCREEN -->
+    <div id="screen-boot" class="menu-overlay">
+        <h1 class="retro-text-shadow">Otomatico</h1>
+    </div>
+
+    <!-- MAIN MENU -->
+    <div id="screen-menu" class="menu-overlay hidden">
+        <h1 class="retro-text-shadow">Rompe Ladrillo</h1>
+        <div class="blink-text">Iniciar Juego</div>
+        <p style="margin-top: 50px; font-size: 14px; opacity: 0.7;">(Presiona ENTER o haz Click)</p>
+    </div>
+
+    <!-- GAME OVER -->
+    <div id="screen-gameover" class="menu-overlay hidden">
+        <h1 id="gameover-title" class="retro-text-shadow"></h1>
+        <p id="gameover-subtitle" style="font-size: 24px; margin-top: 20px;"></p>
+        <div class="blink-text">PRESIONA ENTER</div>
+    </div>
+</div>
+
+<script>
+/**
+ * ESTADO DEL JUEGO (Finite State Machine)
+ */
+const STATE = {
+    BOOT: 'boot',
+    MENU: 'menu',
+    PLAYING: 'playing',
+    GAMEOVER: 'gameover'
+};
+
+let currentState = STATE.BOOT;
+let canvas, ctx;
+
+// Elementos DOM
+const screenBoot = document.getElementById('screen-boot');
+const screenMenu = document.getElementById('screen-menu');
+const screenGameOver = document.getElementById('screen-gameover');
+const scoreDisplay = document.getElementById('scoreDisplay');
+const levelDisplay = document.getElementById('levelDisplay');
+const titleOver = document.getElementById('gameover-title');
+const subtitleOver = document.getElementById('gameover-subtitle');
+
+// Configuración del juego
+let gameState = {
+    ball: null,
+    paddle: null,
+    bricks: [],
+    powerUps: [],
+    particles: [],
+    level: 1,
+    score: 0,
+    lives: 3,
+    isRunning: false,
+    animationFrameId: null
+};
+
+// Configuración de niveles (Dificultad progresiva)
+const LEVELS = [
+    { cols: 6, rows: 4, gap: 10 }, // Nivel 1: Fácil
+    { cols: 8, rows: 5, gap: 8 },  // Nivel 2
+    { cols: 9, rows: 6, gap: 6 },  // Nivel 3
+    { cols: 10, rows: 7, gap: 4 }  // Nivel 4+ (Difícil)
+];
+
+function init() {
+    canvas = document.getElementById('gameCanvas');
+    ctx = canvas.getContext('2d');
+
+    // Iniciar flujo
+    transition(STATE.BOOT);
+}
+
+/**
+ * SISTEMA DE ESTADOS
+ */
+function transition(newState) {
+    currentState = newState;
+    
+    // Ocultar todas las pantallas primero
+    screenBoot.classList.add('hidden');
+    screenMenu.classList.add('hidden');
+    screenGameOver.classList.add('hidden');
+    scoreDisplay.classList.add('hidden');
+    levelDisplay.classList.add('hidden');
+
+    switch (newState) {
+        case STATE.BOOT:
+            screenBoot.classList.remove('hidden');
+            setTimeout(() => transition(STATE.MENU), 2000); // 2 segundos en Boot
+            break;
+
+        case STATE.MENU:
+            screenMenu.classList.remove('hidden');
+            break;
+
+        case STATE.PLAYING:
+            scoreDisplay.classList.remove('hidden');
+            levelDisplay.classList.remove('hidden');
+            startGame();
+            gameLoop();
+            break;
+
+        case STATE.GAMEOVER:
+            // Mostrar título y subtítulo según resultado
+            const isVictory = gameState.score >= 1000; // Criterio de victoria simple para demo o nivel máximo
+            // O si superó el último nivel definido
+            if (gameState.level > LEVELS.length) {
+                 titleOver.innerText = "VICTORIA";
+                 subtitleOver.innerText = "¡Completaste todos los niveles!";
+            } else if (gameState.lives <= 0) {
+                titleOver.innerText = "YOU LOSER";
+                subtitleOver.innerText = `Puntuación final: ${gameState.score}`;
+            } else {
+                // Transición suave a siguiente nivel (simulado aquí como victoria de ronda)
+                titleOver.innerText = "VICTORY";
+                subtitleOver.innerText = "¡Siguiente Nivel!";
+            }
+
+            screenGameOver.classList.remove('hidden');
+            if (gameState.animationFrameId) cancelAnimationFrame(gameState.animationFrameId);
+            break;
+    }
+}
+
+/**
+ * LÓGICA DEL JUEGO
+ */
+function startGame() {
+    // Resetear variables de juego pero mantener persistencia si se desea
+    gameState.lives = 3;
+    gameState.score = 0;
+    gameState.level = 1;
+    resetLevel();
+}
+
+function resetLevel() {
+    const config = LEVELS[Math.min(gameState.level - 1, LEVELS.length - 1)];
+    
+    // Configuración Paddle
+    gameState.paddle = {
+        width: 100,
+        height: 15,
+        x: canvas.width / 2 - 50,
+        y: canvas.height - 30,
+        speed: 8,
+        color: '#0ff' // Cyan
+    };
+
+    // Configuración Ball
+    gameState.ball = {
+        x: canvas.width / 2,
+        y: canvas.height / 2,
+        radius: 8,
+        speed: 4 + (gameState.level * 0.5), // Velocidad progresiva
+        dx: 4,
+        dy: -4,
+        color: '#f0f' // Magenta
+    };
+
+    // Generar Ladrillos y PowerUps
+    gameState.bricks = [];
+    const brickWidth = (canvas.width - (config.cols + 1) * config.gap) / config.cols;
+    const brickHeight = 25;
+    
+    for(let c=0; c<config.cols; c++) {
+        for(let r=0; r<config.rows; r++) {
+            // Probabilidad de power-up basada en nivel (max 30%)
+            const isPowerUp = Math.random() < (0.1 + (gameState.level * 0.05)) && gameState.level < 10;
+            
+            gameState.bricks.push({
+                x: c * (brickWidth + config.gap) + config.gap,
+                y: r * (brickHeight + config.gap) + config.gap + 40, // Margen superior
+                w: brickWidth,
+                h: brickHeight,
+                status: 1,
+                type: isPowerUp ? 'powerup' : 'normal',
+                color: isPowerUp ? '#ff0' : `hsl(${r * (360/config.rows)}, 70%, 50%)`
+            });
+        }
+    }
+
+    gameState.powerUps = [];
+    updateHUD();
+}
+
+function spawnPowerUp(x, y) {
+    const types = ['wide', 'life']; // Tipos de power-ups
+    const type = types[Math.floor(Math.random() * types.length)];
+    
+    gameState.powerUps.push({
+        x: x,
+        y: y,
+        w: 20,
+        h: 15,
+        dy: 3,
+        type: type,
+        active: true
+    });
+}
+
+function update() {
+    if (currentState !== STATE.PLAYING) return;
+
+    // Movimiento Paddle
+    if (keys.ArrowRight && gameState.paddle.x < canvas.width - gameState.paddle.width) {
+        gameState.paddle.x += gameState.paddle.speed;
+    }
+    if (keys.ArrowLeft && gameState.paddle.x > 0) {
+        gameState.paddle.x -= gameState.paddle.speed;
+    }
+
+    // Movimiento Ball
+    gameState.ball.x += gameState.ball.dx;
+    gameState.ball.y += gameState.ball.dy;
+
+    // Colisión Paredes
+    if (gameState.ball.x + gameState.ball.radius > canvas.width || gameState.ball.x - gameState.ball.radius < 0) {
+        gameState.ball.dx *= -1;
+    }
+    if (gameState.ball.y - gameState.ball.radius < 0) {
+        gameState.ball.dy *= -1;
+    }
+
+    // Colisión Paddle
+    if (
+        gameState.ball.x > gameState.paddle.x &&
+        gameState.ball.x < gameState.paddle.x + gameState.paddle.width &&
+        gameState.ball.y + gameState.ball.radius > gameState.paddle.y
+    ) {
+        // Calcular ángulo de rebote según dónde golpee en la paleta
+        let collidePoint = gameState.ball.x - (gameState.paddle.x + gameState.paddle.width / 2);
+        collidePoint = collidePoint / (gameState.paddle.width / 2);
+        
+        let angle = collidePoint * (Math.PI / 3); // Max 60 grados
+        
+        gameState.ball.dx = gameState.ball.speed * Math.sin(angle);
+        gameState.ball.dy = -gameState.ball.speed * Math.cos(angle);
+    }
+
+    // Caída de la pelota
+    if (gameState.ball.y + gameState.ball.radius > canvas.height) {
+        gameState.lives--;
+        if (gameState.lives <= 0) {
+            transition(STATE.GAMEOVER);
+        } else {
+            // Resetear posición bola
+            gameState.ball.x = canvas.width / 2;
+            gameState.ball.y = canvas.height / 2;
+            gameState.ball.dx = -gameState.ball.speed;
+            gameState.ball.dy = -gameState.ball.speed;
+        }
+    }
+
+    // Colisión Ladrillos
+    let activeBricks = 0;
+    for (let b of gameState.bricks) {
+        if (b.status === 1) {
+            activeBricks++;
+            if (
+                gameState.ball.x > b.x && 
+                gameState.ball.x < b.x + b.w && 
+                gameState.ball.y - gameState.ball.radius < b.y + b.h && 
+                gameState.ball.y + gameState.ball.radius > b.y
+            ) {
+                gameState.ball.dy *= -1;
+                b.status = 0;
+                gameState.score += 10 * gameState.level;
+
+                if (b.type === 'powerup') {
+                    spawnPowerUp(b.x + b.w/2, b.y);
+                }
+            }
+        }
+    }
+
+    // Verificar victoria de nivel
+    if (activeBricks === 0) {
+        gameState.level++;
+        transition(STATE.GAMEOVER); // Usamos gameover como transición de nivel para mostrar texto "Victory" temporalmente o reiniciar menu
+        // Alternativa: pasar directo a siguiente nivel sin pantalla si se desea, pero el usuario pidió pantalla.
+        // Aquí simularemos que es una "victoria de nivel".
+        // Para simplificar según requerimientos (Game Over por perder), usaré screenGameOver con Victory breve y auto-reinicio o volver al menu.
+        // Mejor: Si gana nivel -> transicion a menu o siguiente nivel. 
+        // Vamos a hacer que si gana, muestre "VICTORY" y vuelva al Menu tras 2s para seleccionar siguiente nivel.
+        setTimeout(() => transition(STATE.MENU), 2000);
+    }
+
+    updatePowerUps();
+    updateParticles();
+    updateHUD();
+}
+
+function updatePowerUps() {
+    for (let i = gameState.powerUps.length - 1; i >= 0; i--) {
+        let p = gameState.powerUps[i];
+        p.y += p.dy;
+
+        // Colisión con paddle
+        if (p.y + p.h > gameState.paddle.y && p.x > gameState.paddle.x && p.x < gameState.paddle.x + gameState.paddle.width) {
+            applyPowerUp(p.type);
+            gameState.powerUps.splice(i, 1);
+            continue;
+        }
+
+        // Fuera de pantalla
+        if (p.y > canvas.height) {
+            gameState.powerUps.splice(i, 1);
+        }
+    }
+}
+
+function applyPowerUp(type) {
+    if (type === 'wide') {
+        gameState.paddle.width = Math.min(200, gameState.paddle.width + 40);
+        setTimeout(() => gameState.paddle.width -= 40, 10000); // Efecto temporal
+    } else if (type === 'life') {
+        gameState.lives++;
+    }
+}
+
+function updateParticles() {
+    for (let i = gameState.particles.length - 1; i >= 0; i--) {
+        let p = gameState.particles[i];
+        p.x += p.dx;
+        p.y += p.dy;
+        p.life--;
+        if(p.life <= 0) gameState.particles.splice(i, 1);
+    }
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (currentState !== STATE.PLAYING) return;
+
+    // Dibujar Paddle
+    ctx.fillStyle = gameState.paddle.color;
+    ctx.fillRect(gameState.paddle.x, gameState.paddle.y, gameState.paddle.width, gameState.paddle.height);
+
+    // Dibujar Ball
+    ctx.beginPath();
+    ctx.arc(gameState.ball.x, gameState.ball.y, gameState.ball.radius, 0, Math.PI*2);
+    ctx.fillStyle = gameState.ball.color;
+    ctx.fill();
+    ctx.closePath();
+
+    // Dibujar Ladrillos
+    for (let b of gameState.bricks) {
+        if (b.status === 1) {
+            ctx.fillStyle = b.color;
+            if(b.type === 'powerup') {
+                // Efecto especial para powerups (borde)
+                ctx.fillRect(b.x, b.y, b.w, b.h);
+                ctx.strokeStyle = '#fff';
+                ctx.strokeRect(b.x, b.y, b.w, b.h);
+            } else {
+                ctx.fillRect(b.x, b.y, b.w, b.h);
+            }
+        }
+    }
+
+    // Dibujar PowerUps
+    for (let p of gameState.powerUps) {
+        ctx.fillStyle = '#ff0';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y + p.h/2, 10, 0, Math.PI*2);
+        ctx.fill();
+        
+        // Letra interna
+        ctx.fillStyle = '#000';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(p.type === 'wide' ? 'W' : '+', p.x, p.y + 5);
+    }
+
+    // Dibujar Particulas
+    for(let p of gameState.particles) {
+        ctx.fillStyle = `rgba(255, 255, 255, ${p.life/30})`;
+        ctx.fillRect(p.x, p.y, 3, 3);
+    }
+}
+
+function updateHUD() {
+    scoreDisplay.innerText = `PUNTOS: ${gameState.score}`;
+    levelDisplay.innerText = `NIVEL: ${gameState.level}`;
+}
+
+function gameLoop() {
+    if (currentState === STATE.PLAYING) {
+        update();
+        draw();
+        gameState.animationFrameId = requestAnimationFrame(gameLoop);
+    }
+}
+
+// Controles
+const keys = {};
+window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    
+    if (e.code === 'Enter') handleInput();
+});
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+canvas = document.getElementById('gameCanvas'); // Referencia global
+document.getElementById('game-container').addEventListener('click', handleInput);
+
+function handleInput() {
+    if (currentState === STATE.MENU) {
+        transition(STATE.PLAYING);
+    } else if (currentState === STATE.GAMEOVER) {
+        // Si perdimos volver al menu, si ganamos nivel avanzar
+        if (titleOver.innerText === "YOU LOSER") {
+            gameState.score = 0;
+            gameState.level = 1;
+            transition(STATE.MENU);
+        } else {
+            // Ganó nivel, siguiente nivel
+            resetLevel();
+            transition(STATE.PLAYING);
+        }
+    }
+}
+
+// Iniciar
+window.onload = init;
+
+</script>
+</body>
+</html>
