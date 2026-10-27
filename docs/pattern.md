@@ -218,6 +218,7 @@ class StatePause extends StateGame
 }
 
 ```
+
 ### Over - Todo acabo ahora toca recoger
 Esta bien liberar toda la memoria y recursos. Quizas incluso una pantalla de score o simplesmente un Game Over.
 
@@ -251,4 +252,122 @@ class StateOver extends StateGame
     }
 }
 
+```
+
+## ECS - Entidad-Componente-Sistema
+
+```javascript
+class Position 
+{
+  constructor(x=0,y=0)
+  {
+    this.x = x;
+    this.y = y;
+  }   
+}
+
+class Velocity 
+{
+  constructor(x=0,y=0)
+  {
+    this.vx = x;
+    this.vy = y;
+  }   
+}
+
+class Sprite
+{
+  constructor(sprite=null, x=0,y=0)
+  {
+    this.sprite = sprite;
+    this.width = x;
+    this.height = y;
+  }   
+}
+
+class Component
+{
+    constructor()
+    {
+        this.entityId=0;
+        this.positions = new Map();
+        this.velocities = new Map();
+        this.renderables = new Map();
+        this.trash = [];
+    }
+
+    createEntity()
+    {
+        return ++this.entityId;
+    }
+}
+
+class System
+{
+    constructor(component)
+    {
+        this.world = component
+    }
+
+    #rectIntersect(r1, r2) {
+        return !(r2.x > r1.x + r1.w || 
+                    r2.x + r2.w < r1.x || 
+                    r2.y > r1.y + r1.h || 
+                    r2.y + r2.h < r1.y);
+    }
+
+    movementSystem() {
+        // Buscamos entidades que tengan tanto Posición como Velocidad
+        for (const [entityId, pos] of world.positions.entries()) {
+            if (world.velocities.has(entityId)) {
+                const vel = world.velocities.get(entityId);
+                pos.x += vel.vx;
+                pos.y += vel.vy;
+            }
+        }
+    }
+
+
+    collideSystem(referenceId)
+    {
+        if (!world.positions.has(referenceId) || !world.renderables.has(entityId))
+        {
+            return;
+        }
+        const scope = {... world.positions.get(referenceId), ... world.renderables.get(referenceId)};
+
+        for (const [entityId, pos] of world.positions.entries()) {
+            if (referenceId !== entityId && world.renderables.has(entityId)) {
+                const item = {x:pos.x, y:pos.y, ...world.renderables.get(entityId)}
+                  if(this.#rectIntersect(scope,item))
+                  {
+                        world.trash.push(refenceId)
+                        world.trash.push(entityId)
+                  }
+            }
+        }
+    }
+    
+    // Sistema de Renderizado: Dibuja en la consola
+    renderSystem() {
+        //clear();
+        for (const [entityId, render] of renderables.entries()) {
+            if (world.positions.has(entityId)) {
+                const pos = world.positions.get(entityId);
+                console.log(`Entidad [${entityId}] ${render.sprite} está en la posición (${pos.x}, ${pos.y})`);
+            }
+        }
+    }
+
+    recicleSystem()
+    {
+        let item = null
+        while(world.trash.lenght){
+            item = world.trash.pop()
+            world.positions.delete(item);
+            world.velocities.delete(item);
+            world.renderables.delete(item);
+        }
+    }
+}
 ```
