@@ -1,0 +1,27 @@
+import { Game } from "./engine/Game.js";
+import { StateMachine } from "./engine/StateMachine.js";
+import { EventBus } from "./engine/EventBus.js";
+import { InputManager } from "./engine/input/InputManager.js";
+import { CanvasRenderer } from "./engine/rendering/CanvasRenderer.js";
+import { RenderManager } from "./engine/rendering/RenderManager.js";
+import { ResourceManager } from "./engine/resources/ResourceManager.js";
+import { LocalizationManager } from "./engine/localization/LocalizationManager.js";
+import { AudioManager } from "./engine/audio/AudioManager.js";
+import { WebAudioBackend } from "./engine/audio/WebAudioBackend.js";
+import { MenuState, PlayState, PauseState, VictoryState } from "./game/states.js";
+
+const canvas=document.querySelector("#game");
+const input=new InputManager(window);
+const resources=new ResourceManager();
+const localization=new LocalizationManager(resources,"en");
+const renderer=new RenderManager(new CanvasRenderer());
+const audio=new AudioManager(new WebAudioBackend());
+const events=new EventBus();
+const states=new StateMachine({menu:new MenuState(),playing:new PlayState(),paused:new PauseState(),victory:new VictoryState()});
+const game=new Game({input,renderer,resources,localization,audio,events,stateMachine:states,canvas});
+game.statusLabel=()=>{const labels={menu:"status.ready",playing:"status.racing",paused:"status.paused",victory:"status.finished"};document.querySelector("#status").textContent=localization.t(labels[states.currentName]??"status.ready").toUpperCase();};
+game.toggleSound=()=>{const enabled=audio.toggle();audio.setMasterVolume(audio.masterVolume);document.querySelector("#sound").textContent=localization.t(enabled?"status.soundOn":"status.soundOff");};
+localization.subscribe(()=>{game.statusLabel();document.querySelector("#sound").textContent=localization.t(audio.enabled?"status.soundOn":"status.soundOff");document.documentElement.lang=localization.locale;});
+document.querySelector("#language").addEventListener("click",()=>localization.toggle());
+document.querySelector("#sound").addEventListener("click",()=>game.toggleSound());
+await game.initialize();states.change("menu",game);game.statusLabel();document.querySelector("#sound").textContent=localization.t("status.soundOn");game.start();window.addEventListener("beforeunload",()=>input.destroy());

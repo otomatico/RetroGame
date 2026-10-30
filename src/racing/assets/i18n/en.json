@@ -1,0 +1,16 @@
+{
+    "status.ready": "READY",
+    "status.racing": "RACING",
+    "status.paused": "PAUSED",
+    "status.finished": "FINISH",
+    "status.soundOn": "SOUND: ON",
+    "status.soundOff": "SOUND: OFF",
+    "menu.title": "NEON / RUSH",
+    "menu.subtitle": "ARCADE STREET RACING",
+    "menu.controls": "A/D OR ARROWS TO STEER",
+    "menu.prompt": "PRESS ENTER TO START",
+    "pause.title": "PAUSED",
+    "pause.prompt": "P / ESC TO RESUME",
+    "gameover.title": "RACE COMPLETE",
+    "gameover.prompt": "ENTER TO RETRY"
+}

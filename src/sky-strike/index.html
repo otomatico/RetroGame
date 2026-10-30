@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="theme-color" content="#090d16">
+    <title>SKY / STRIKE — Vertical Shoot 'Em Up</title>
+    <link rel="stylesheet" href="./style.css">
+</head>
+
+<body>
+    <main class="shell">
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">RETRO NEON MINIMAL / ARCADE 03</p>
+                <h1>SKY<span class="dot"> / </span>STRIKE</h1>
+            </div>
+            <div class="top-actions"><span id="status" class="status">READY</span><button id="language"
+                    class="small-button" type="button">ES / EN</button><button id="sound" class="small-button"
+                    type="button">SOUND: ON</button></div>
+        </header>
+        <section class="game-frame" aria-label="Sky Strike vertical shoot em up"><canvas id="game" width="960"
+                height="600" aria-label="Vertical scrolling airplane shooter"></canvas>
+            <div class="scanlines" aria-hidden="true"></div>
+        </section>
+        <footer>
+            <div class="help">
+                <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>MOVE</span><i></i><kbd>SPACE</kbd><span>FIRE</span>
+            </div>
+            <div class="help"><kbd>X</kbd><span>BOMB</span><kbd>P</kbd><span>PAUSE</span><kbd>R</kbd><span>MENU</span>
+            </div>
+        </footer>
+        <p class="note">Vertical scrolling shoot ’em up · ECS gameplay · power upgrades, shields, smart bombs and a
+            heavy boss. Retro Neon Minimal visual identity.</p>
+    </main>
+    <script type="module" src="./main.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,19 @@
+{
+    "title": "NEON BIRD",
+    "subtitle": "VECTORIAL ARCADE ENGINE",
+    "audioOn": "AUDIO: ON",
+    "audioOff": "AUDIO: OFF",
+    "pause": "PAUSE [P]",
+    "resume": "RESUME",
+    "score": "SCORE:",
+    "highscore": "BEST:",
+    "bootDesc": "2D ARCADE ENGINE. PRESS SPACE OR CLICK TO THRUST MODULE.",
+    "startSys": "START SYSTEM",
+    "pausedTitle": "SYSTEM PAUSED",
+    "pausedDesc": "SIMULATION AWAITING ORDERS.",
+    "overTitle": "MODULE DESTROYED",
+    "overDesc": "COLLISION DETECTED WITH OBSTACLE.",
+    "restartSys": "RESTART MODULE",
+    "hintJump": "THRUST",
+    "hintPause": "PAUSE"
+}

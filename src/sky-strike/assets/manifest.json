@@ -1,0 +1,8 @@
+{
+    "version": 1,
+    "locales": {
+        "es": "./assets/i18n/es.json",
+        "en": "./assets/i18n/en.json"
+    },
+    "assets": []
+}

@@ -1,0 +1,19 @@
+{
+    "title": "NEON BIRD",
+    "subtitle": "MOTOR ARCADE VECTORIAL",
+    "audioOn": "AUDIO: ON",
+    "audioOff": "AUDIO: OFF",
+    "pause": "PAUSA [P]",
+    "resume": "REANUDAR",
+    "score": "PUNTOS:",
+    "highscore": "RÉCORD:",
+    "bootDesc": "MOTOR ARCADE 2D. PULSA ESPACIO O HAZ CLIC PARA IMPULSAR EL MÓDULO.",
+    "startSys": "INICIAR SISTEMA",
+    "pausedTitle": "SISTEMA PAUSADO",
+    "pausedDesc": "SIMULACIÓN EN ESPERA DE ÓRDENES.",
+    "overTitle": "MÓDULO DESTRUIDO",
+    "overDesc": "COLISIÓN DETECTADA CON EL OBSTÁCULO.",
+    "restartSys": "REINICIAR MÓDULO",
+    "hintJump": "IMPULSO",
+    "hintPause": "PAUSA"
+}

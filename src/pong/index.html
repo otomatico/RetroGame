@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#090d16">
+  <title>Pong · Engine Architecture Example</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">ENGINE SAMPLE / 01</p>
+        <h1>PONG<span class="dot">.</span></h1>
+      </div>
+      <div class="top-actions">
+        <span id="status" class="status">READY</span>
+        <button id="language" class="small-button" type="button" aria-label="Change language">ES / EN</button>
+        <button id="sound" class="small-button" type="button" aria-label="Toggle sound">SOUND: ON</button>
+      </div>
+    </header>
+    <section class="game-frame" aria-label="Pong game">
+      <canvas id="game" width="512" height="320" aria-label="Pong"></canvas>
+      <div class="scanlines" aria-hidden="true"></div>
+    </section>
+    <footer>
+      <div class="help"><kbd>W</kbd><kbd>S</kbd><span>PLAYER 1</span><i></i><kbd>↑</kbd><kbd>↓</kbd><span>PLAYER 2</span></div>
+      <div class="help"><kbd>ENTER</kbd><span>START</span><kbd>P</kbd><span>PAUSE</span><kbd>L</kbd><span>LANGUAGE</span></div>
+    </footer>
+    <p class="note">A small playable demonstration of a reusable 2D engine architecture.</p>
+  </main>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

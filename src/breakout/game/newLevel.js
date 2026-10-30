@@ -1,0 +1,3 @@
+import {addBricks} from './createWorld.js';import {Transform,Velocity,Ball} from '../engine/ecs/components.js';
+import {HEIGHT} from './constants.js';
+export function initializeLevel(system,world,level){system.levelIndex=level;system.levelCleared=false;system.activePower='';system.powerTime=0;system.baseSpeed=350;const p=world.query(Transform)[0];for(const id of world.query(Transform,Ball))world.destroyEntity(id);const pid=world.query(Transform)[0];const paddle=world.getComponent(pid,Transform);const id=world.createEntity();world.addComponent(id,new Transform(paddle.x+paddle.width/2-8,HEIGHT-78,16,16));world.addComponent(id,new Velocity());world.addComponent(id,new Ball());addBricks(world,level);}

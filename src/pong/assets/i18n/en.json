@@ -1,0 +1,21 @@
+{
+  "game.title": "PONG",
+  "menu.title": "PONG",
+  "menu.subtitle": "A TWO-PLAYER CLASSIC",
+  "menu.prompt": "PRESS ENTER TO PLAY",
+  "menu.controls": "W / S  ·  PLAYER 1      ↑ / ↓  ·  PLAYER 2",
+  "pause.title": "PAUSED",
+  "pause.prompt": "PRESS P OR ENTER TO RESUME",
+  "gameover.title": "GAME OVER",
+  "gameover.winner": "PLAYER {player} WINS!",
+  "gameover.prompt": "PRESS R OR ENTER TO RESTART",
+  "hud.player1": "PLAYER 1",
+  "hud.player2": "PLAYER 2",
+  "hud.firstTo": "FIRST TO {score}",
+  "status.ready": "READY",
+  "status.playing": "PLAYING",
+  "status.paused": "PAUSED",
+  "status.gameover": "GAME OVER",
+  "status.soundOn": "SOUND: ON",
+  "status.soundOff": "SOUND: OFF"
+}

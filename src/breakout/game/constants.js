@@ -1,0 +1,2 @@
+export const WIDTH=960,HEIGHT=640,FIELD_TOP=82,FIELD_BOTTOM=612,LEVEL_COUNT=5,STARTING_LIVES=3;
+export const COLORS={bg:'#070b13',white:'#eef5ff',muted:'#6d809b',cyan:'#63f4dc',pink:'#ff648c',line:'#25354b',yellow:'#ffe08a',purple:'#b69cff'};

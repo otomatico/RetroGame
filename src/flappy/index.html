@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro Neon Flappy Bird</title>
+        <meta charset="utf-8">
+    <link rel="stylesheet" href="./style.css">
+    <!--
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    -->
+</head>
+<body>
+
+<div id="game-container">
+    <!-- HEADER -->
+    <header>
+        <div class="title-group">
+            <h1 id="ui-title">NEON BIRD</h1>
+            <div class="subtitle">ARCADE VECTORIAL ENGINE</div>
+        </div>
+        <div class="header-controls">
+            <button id="btn-audio" class="btn">
+                <span id="audio-icon">🔊</span>
+                <span id="ui-audio-label">AUDIO: ON</span>
+            </button>
+            <button id="btn-pause" class="btn">
+                <span id="ui-pause-label">PAUSA [P]</span>
+            </button>
+            <button id="btn-lang" class="btn">
+                <span>🌐</span> ES/EN
+            </button>
+        </div>
+    </header>
+
+    <!-- HUD STATS -->
+    <div class="hud-bar">
+        <div class="stat-group">
+            <div class="stat">
+                <span class="stat-label" id="ui-lbl-score">PUNTOS:</span>
+                <span id="hud-score" class="stat-value primary">0</span>
+            </div>
+        </div>
+        <div class="stat-group">
+            <div class="stat">
+                <span class="stat-label" id="ui-lbl-highscore">RÉCORD:</span>
+                <span id="hud-highscore" class="stat-value secondary">0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- CANVAS ENGINE CONTAINER -->
+    <div class="canvas-container">
+        <canvas id="game" width="480" height="540"></canvas>
+        <div class="scanlines"></div>
+
+        <!-- OVERLAY: BOOT -->
+        <div id="overlay-boot" class="overlay">
+            <h2>NEON BIRD</h2>
+            <p id="ui-boot-desc">MOTOR ARCADE 2D. PULSA ESPACIO O HAZ CLIC PARA IMPULSAR EL MÓDULO.</p>
+            <button id="btn-start" class="btn btn-active" style="padding: 10px 24px; font-size: 13px;">
+                INICIAR SISTEMA
+            </button>
+        </div>
+
+        <!-- OVERLAY: PAUSE -->
+        <div id="overlay-pause" class="overlay hidden">
+            <h2 id="ui-pause-title">SISTEMA PAUSADO</h2>
+            <p id="ui-pause-desc">SIMULACIÓN EN ESPERA DE ÓRDENES.</p>
+            <button id="btn-resume" class="btn btn-active" style="padding: 8px 20px;">
+                REANUDAR
+            </button>
+        </div>
+
+        <!-- OVERLAY: OVER -->
+        <div id="overlay-over" class="overlay hidden">
+            <h2 id="ui-over-title" style="color: var(--color-secondary);">MÓDULO DESTRUIDO</h2>
+            <p id="ui-over-desc">COLISIÓN DETECTADA CON EL OBSTÁCULO.</p>
+            <div style="margin-bottom: 16px; font-size: 13px; text-align: center;">
+                <div>PUNTUACIÓN: <span id="final-score" style="color: var(--color-primary); font-weight: bold;">0</span></div>
+                <div style="margin-top: 4px;">MEJOR MARCA: <span id="final-highscore" style="color: var(--color-secondary); font-weight: bold;">0</span></div>
+            </div>
+            <button id="btn-restart" class="btn btn-secondary" style="padding: 8px 20px;">
+                REINICIAR MÓDULO
+            </button>
+        </div>
+    </div>
+
+    <!-- FOOTER CONTROLS -->
+    <footer>
+        <div class="control-hint">
+            <span class="key-badge">ESPACIO</span> / <span class="key-badge">CLIC</span>
+            <span id="ui-hint-jump">IMPULSO</span>
+        </div>
+        <div class="control-hint">
+            <span class="key-badge">P</span>
+            <span id="ui-hint-pause">PAUSA</span>
+        </div>
+    </footer>
+</div>
+<script type="module" src="./main.js"></script>
+</body>
+</html>

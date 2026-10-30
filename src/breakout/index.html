@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="theme-color" content="#090d16">
+    <title>BREAKOUT. — Retro Neon Minimal</title>
+    <link rel="stylesheet" href="./style.css">
+</head>
+
+<body>
+    <main class="shell">
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">RETRO NEON / ENGINE SAMPLE 02</p>
+                <h1>BREAKOUT<span class="dot">.</span></h1>
+            </div>
+            <div class="top-actions"><span id="status" class="status">LISTO</span><button id="language"
+                    class="small-button">ES / EN</button><button id="sound" class="small-button">SONIDO: SÍ</button>
+            </div>
+        </header>
+        <section class="game-frame"><canvas id="game" width="960" height="640" aria-label="Breakout"></canvas>
+            <div class="scanlines" aria-hidden="true"></div>
+        </section>
+        <footer>
+            <div class="help"><kbd>A</kbd><kbd>D</kbd><span>MOVER</span><i></i><kbd>ESPACIO</kbd><span>LANZAR</span>
+            </div>
+            <div class="help">
+                <kbd>P</kbd><span>PAUSA</span><kbd>M</kbd><span>AUDIO</span><kbd>L</kbd><span>IDIOMA</span></div>
+        </footer>
+        <p class="note">ROMPE LOS BLOQUES · ATRAPA MEJORAS · SUPERA LOS 5 NIVELES</p>
+    </main>
+    <script type="module" src="./main.js"></script>
+</body>
+
+</html>
